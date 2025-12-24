@@ -1,0 +1,15 @@
+[package]
+name = "kernel"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bootloader_api = "0.11.13"
+heapless = "0.9.2"
+linked_list_allocator = "0.10.5"
+pic8259 = "0.11.0"
+spin = "0.10.0"
+uart_16550 = "0.4.0"
+x2apic = "0.5.0"
+x86 = "0.52.0"
+x86_64 = "0.15.2"
