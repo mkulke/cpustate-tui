@@ -9,15 +9,22 @@ use bootloader_api::config::{BootloaderConfig, Mapping};
 use bootloader_api::{entry_point, BootInfo};
 use core::fmt::Write;
 use core::sync::atomic::Ordering;
+use ratatui::layout::{Constraint, Direction, Layout};
+use ratatui::style::Style;
+use ratatui::text::Line;
+use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::{Frame, Terminal};
 use uart_16550::SerialPort;
 use x86_64::instructions::hlt;
 
+mod app_state;
 mod interrupts;
 mod ioapic;
 mod irq_mutex;
 mod lapic;
 mod memory;
 mod serial;
+mod ratatui_backend;
 
 static BOOTLOADER_CONFIG: BootloaderConfig = {
     let mut config = BootloaderConfig::new_default();
@@ -45,29 +52,67 @@ pub fn exit_qemu(exit_code: QemuExitCode) -> ! {
     }
 }
 
+fn ui(f: &mut Frame<'_>, app: &app_state::AppState) {
+    let area = f.area();
+
+    let block = Block::default()
+        .title("Serial ANSI Demo")
+        .borders(Borders::ALL);
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let [_, content, _] = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Fill(1),
+            Constraint::Length(1),
+            Constraint::Fill(1),
+        ])
+        .areas(inner);
+
+    let p = Paragraph::new(Line::styled(
+        "Hello from Ratatui!",
+        Style::default().fg(app.color()),
+    ))
+    .centered();
+
+    f.render_widget(p, content);
+}
+
 fn main_loop(port: &mut SerialPort) -> ! {
-    let mut tick_counter = 0u32;
+    let backend = ratatui_backend::SerialAnsiBackend::new(port, 80, 25);
+    let mut terminal = Terminal::new(backend).unwrap();
+
+    let mut app = app_state::AppState::new();
+
+    // initial draw
+    terminal.draw(|f| ui(f, &app)).unwrap();
+
+    let mut needs_redraw = false;
+
     let mut abort = false;
     while !abort {
         hlt();
 
         let n = interrupts::PRINT_EVENTS.swap(0, Ordering::AcqRel);
         for _ in 0..n {
-            writeln!(port, "tick 0x{0:02x}", tick_counter).unwrap();
-            tick_counter += 1;
+            app.tick();
+            needs_redraw = true;
         }
 
         serial::RX_QUEUE.with(|queue| {
             let mut queue = queue.borrow_mut();
             let (_prod, mut cons) = queue.split();
 
-            while let Some(byte) = cons.dequeue() {
-                writeln!(port, "COM1 RX: 0x{:02x} ('{}')", byte, byte as char).unwrap();
-                if byte == b'q' {
-                    abort = true;
-                }
+            while let Some(byte) = cons.dequeue() && byte == b'q' {
+                abort = true;
             }
         });
+
+        if needs_redraw {
+            terminal.draw(|f| ui(f, &app)).unwrap();
+            needs_redraw = false;
+        }
     }
 
     exit_qemu(QemuExitCode::Success);

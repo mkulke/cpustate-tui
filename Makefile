@@ -1,10 +1,13 @@
+CARGO_FILES = Cargo.toml image/Cargo.toml kernel/Cargo.toml Cargo.lock
+BUILD_FILES = $(CARGO_FILES) kernel/src/*.rs image/build.rs
+
 .PHONY:
 all: bios.img
 
 .PHONY:
-bios.img: kernel/src/*.rs
-	cargo build --release && \
-    cp $$(ls -t target/release/build/basic-os-*/out/bios.img | head -1) $@
+bios.img: $(BUILD_FILES)
+	cargo build -p image --release && \
+    cp $$(ls -t target/release/build/image-*/out/bios.img | head -1) $@
 
 .PHONY:
 run: bios.img
