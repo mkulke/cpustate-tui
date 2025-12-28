@@ -5,26 +5,25 @@
 extern crate alloc;
 
 use alloc::boxed::Box;
+use app::{App, Pane};
 use bootloader_api::config::{BootloaderConfig, Mapping};
 use bootloader_api::{entry_point, BootInfo};
 use core::fmt::Write;
 use core::sync::atomic::Ordering;
-use ratatui::layout::{Constraint, Direction, Layout};
-use ratatui::style::Style;
-use ratatui::text::Line;
-use ratatui::widgets::{Block, Borders, Paragraph};
-use ratatui::{Frame, Terminal};
 use uart_16550::SerialPort;
+use view::View;
 use x86_64::instructions::hlt;
 
-mod app_state;
+mod app;
+mod fpu;
 mod interrupts;
 mod ioapic;
 mod irq_mutex;
 mod lapic;
 mod memory;
-mod serial;
 mod ratatui_backend;
+mod serial;
+mod view;
 
 static BOOTLOADER_CONFIG: BootloaderConfig = {
     let mut config = BootloaderConfig::new_default();
@@ -52,41 +51,15 @@ pub fn exit_qemu(exit_code: QemuExitCode) -> ! {
     }
 }
 
-fn ui(f: &mut Frame<'_>, app: &app_state::AppState) {
-    let area = f.area();
-
-    let block = Block::default()
-        .title("Serial ANSI Demo")
-        .borders(Borders::ALL);
-    let inner = block.inner(area);
-    f.render_widget(block, area);
-
-    let [_, content, _] = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Fill(1),
-            Constraint::Length(1),
-            Constraint::Fill(1),
-        ])
-        .areas(inner);
-
-    let p = Paragraph::new(Line::styled(
-        "Hello from Ratatui!",
-        Style::default().fg(app.color()),
-    ))
-    .centered();
-
-    f.render_widget(p, content);
-}
-
 fn main_loop(port: &mut SerialPort) -> ! {
-    let backend = ratatui_backend::SerialAnsiBackend::new(port, 80, 25);
-    let mut terminal = Terminal::new(backend).unwrap();
+    // let backend = ratatui_backend::SerialAnsiBackend::new(port, 80, 24);
+    // let mut terminal = Terminal::new(backend).unwrap();
 
-    let mut app = app_state::AppState::new();
+    let mut app = App::new();
+    let mut view = View::new(port);
 
     // initial draw
-    terminal.draw(|f| ui(f, &app)).unwrap();
+    view.draw(&app);
 
     let mut needs_redraw = false;
 
@@ -104,13 +77,38 @@ fn main_loop(port: &mut SerialPort) -> ! {
             let mut queue = queue.borrow_mut();
             let (_prod, mut cons) = queue.split();
 
-            while let Some(byte) = cons.dequeue() && byte == b'q' {
-                abort = true;
+            while let Some(byte) = cons.dequeue() {
+                match byte {
+                    b'q' => {
+                        abort = true;
+                    }
+                    b'c' => {
+                        app.set_pane(Pane::Cpuid);
+                        needs_redraw = true;
+                    }
+                    b'f' => {
+                        app.set_pane(Pane::Fpu);
+                        needs_redraw = true;
+                    }
+                    b'x' => {
+                        app.set_pane(Pane::Xsave);
+                        needs_redraw = true;
+                    }
+                    b'j' => {
+                        view.scroll_down(&mut app);
+                        needs_redraw = true;
+                    }
+                    b'k' => {
+                        view.scroll_up(&mut app);
+                        needs_redraw = true;
+                    }
+                    _ => {}
+                }
             }
         });
 
         if needs_redraw {
-            terminal.draw(|f| ui(f, &app)).unwrap();
+            view.draw(&app);
             needs_redraw = false;
         }
     }
