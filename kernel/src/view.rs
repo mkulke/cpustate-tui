@@ -67,11 +67,32 @@ fn draw_dummy_pane(rect: Rect, frame: &mut Frame, app: &App) -> Option<u16> {
 }
 
 fn draw_cpuid_content(rect: Rect, frame: &mut Frame, state: &CpuidState) -> Option<u16> {
-    let vendor_info = Line::raw(format!("vendor_info=\"{}\"", state.vendor_info()));
-    let features_header = Line::styled("Features", Style::default().bold());
-    let mut lines = vec![vendor_info, features_header];
+    let vendor_info = state.vendor_info();
+    let vendor_header: Line = Line::styled("CPU Vendor:", Style::default().bold());
+    let amd = if vendor_info.amd { "Yes" } else { "No" };
+    let amd_line = Line::raw(format!("{:<8} = {}", "AMD", amd));
+    let intel = if vendor_info.intel { "Yes" } else { "No" };
+    let intel_line = Line::raw(format!("{:<8} = {}", "Intel", intel));
+    let mut lines = vec![vendor_header, amd_line, intel_line];
+
+    let empty_line = Line::raw("");
+    lines.push(empty_line.clone());
+
+    let features_header = Line::styled("CPU Features:", Style::default().bold());
+    lines.push(features_header);
     for feature in state.features() {
-        let line = Line::raw(format!("{}={}", feature.0, feature.1));
+        let yes_no = if feature.1 { "Yes" } else { "No" };
+        let line = Line::raw(format!("{:<16} = {}", feature.0, yes_no));
+        lines.push(line);
+    }
+
+    lines.push(empty_line);
+
+    let extended_features_header = Line::styled("Extended Features:", Style::default().bold());
+    lines.push(extended_features_header);
+    for extended_feature in state.extended_features() {
+        let yes_no = if extended_feature.1 { "Yes" } else { "No" };
+        let line = Line::raw(format!("{:<16} = {}", extended_feature.0, yes_no));
         lines.push(line);
     }
 

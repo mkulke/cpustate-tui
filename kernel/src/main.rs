@@ -15,6 +15,7 @@ use view::View;
 use x86_64::instructions::hlt;
 
 mod app;
+mod cpuid;
 mod fpu;
 mod interrupts;
 mod ioapic;
