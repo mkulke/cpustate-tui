@@ -2,7 +2,7 @@ use alloc::vec::Vec;
 use ratatui::style::Color;
 
 use crate::fpu::{enable_sse, fxsave64, set_xmm0_bytes, set_xmm15_bytes, FxSaveAligned};
-use crate::cpuid::{CpuFeatures, VendorInfo};
+use crate::cpuid::{CpuFeatures, VendorInfo, ExtendedStateFeatures};
 
 pub struct CpuidState {
     y_offset: u16,
@@ -28,6 +28,10 @@ impl CpuidState {
         &self.features.extended_features()
     }
 
+    pub fn extended_state_features(&self) -> &ExtendedStateFeatures {
+        &self.features.extended_state_features()
+    }
+
     pub fn vendor_info(&self) -> &VendorInfo {
         self.features.vendor_info()
     }
@@ -35,12 +39,25 @@ impl CpuidState {
     pub fn y_offset(&self) -> u16 {
         self.y_offset
     }
+
+    pub fn has_xsave(&self) -> bool {
+        self.features.has_xsave()
+    }
+
+    pub fn leaf_0xd_0(&self) -> [u32; 4] {
+        self.features.leaf(0xD, 0)
+    }
+
+    pub fn leaf_0xd_1(&self) -> [u32; 4] {
+        self.features.leaf(0xD, 1)
+    }
 }
 
 pub enum Pane {
     Cpuid,
     Fpu,
     Xsave,
+    Dummy,
 }
 
 pub struct App {
@@ -117,11 +134,18 @@ impl App {
         }
     }
 
+    pub fn scroll_to(&mut self, offset: Option<u16>) {
+        if let Pane::Cpuid = self.pane {
+            self.cpuid_state.y_offset = offset.unwrap_or(0);
+        }
+    }
+
     pub fn pane_title(&self) -> &'static str {
         match self.pane {
             Pane::Cpuid => "CPUID",
             Pane::Fpu => "FPU",
             Pane::Xsave => "XSAVE",
+            Pane::Dummy => "Dummy",
         }
     }
 

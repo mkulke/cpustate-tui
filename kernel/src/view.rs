@@ -2,6 +2,7 @@ use crate::app::{App, CpuidState, Pane};
 use crate::ratatui_backend::SerialAnsiBackend;
 use alloc::format;
 use alloc::vec;
+use alloc::vec::Vec;
 use core::fmt::LowerHex;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::Style;
@@ -43,6 +44,10 @@ impl<'a> View<'a> {
     pub fn scroll_down(&mut self, app: &mut App) {
         app.scroll_down(self.max_scroll);
     }
+
+    pub fn scroll_to_bottom(&mut self, app: &mut App) {
+        app.scroll_to(self.max_scroll);
+    }
 }
 
 fn draw_dummy_pane(rect: Rect, frame: &mut Frame, app: &App) -> Option<u16> {
@@ -65,6 +70,33 @@ fn draw_dummy_pane(rect: Rect, frame: &mut Frame, app: &App) -> Option<u16> {
 
     None
 }
+fn draw_xsave_content(rect: Rect, frame: &mut Frame, state: &CpuidState) -> Option<u16> {
+    let line_1 = format!("Leaf 0x1 reports XSAVE: {}", state.has_xsave());
+    let [eax, ebx, ecx, edx] = state.leaf_0xd_0();
+    let line_2 = format!(
+        "Leaf 0xD:0 -> EAX={:08x} EBX={:08x} ECX={:08x} EDX={:08x}",
+        eax, ebx, ecx, edx
+    );
+    let [eax, ..] = state.leaf_0xd_1();
+    let line_3 = format!(
+        "Leaf 0xD:1 -> EAX={:08x} (bit 1 XSAVEC={})",
+        eax,
+        (eax >> 1) & 1
+    );
+
+    let lines = vec![line_1, line_2, line_3]
+        .into_iter()
+        .map(Line::raw)
+        .collect::<Vec<Line>>();
+    let n_lines = lines.len();
+    let paragraph = Paragraph::new(lines);
+
+    frame.render_widget(paragraph, rect);
+
+    let max_scroll = (n_lines as u16) - rect.height;
+
+    Some(max_scroll)
+}
 
 fn draw_cpuid_content(rect: Rect, frame: &mut Frame, state: &CpuidState) -> Option<u16> {
     let vendor_info = state.vendor_info();
@@ -86,13 +118,32 @@ fn draw_cpuid_content(rect: Rect, frame: &mut Frame, state: &CpuidState) -> Opti
         lines.push(line);
     }
 
-    lines.push(empty_line);
+    lines.push(empty_line.clone());
 
     let extended_features_header = Line::styled("Extended Features:", Style::default().bold());
     lines.push(extended_features_header);
     for extended_feature in state.extended_features() {
         let yes_no = if extended_feature.1 { "Yes" } else { "No" };
         let line = Line::raw(format!("{:<16} = {}", extended_feature.0, yes_no));
+        lines.push(line);
+    }
+
+    lines.push(empty_line.clone());
+
+    let extended_state_features_header =
+        Line::styled("Extended State Features:", Style::default().bold());
+    lines.push(extended_state_features_header);
+    let esf = state.extended_state_features();
+    for feature in esf.supports() {
+        let yes_no = if feature.1 { "Yes" } else { "No" };
+        let line = Line::raw(format!("{:<30} = {}", feature.0, yes_no));
+        lines.push(line);
+    }
+
+    lines.push(empty_line);
+
+    for size_feature in esf.sizes() {
+        let line = Line::raw(format!("{:<34} = {} bytes", size_feature.0, size_feature.1));
         lines.push(line);
     }
 
@@ -154,10 +205,11 @@ fn ui(f: &mut Frame<'_>, app: &App) -> Option<u16> {
     let max_scroll = match app.pane() {
         Pane::Fpu => draw_fpu_content(pane_inner, f, app),
         Pane::Cpuid => draw_cpuid_content(pane_inner, f, app.cpuid_state()),
-        _ => draw_dummy_pane(pane_inner, f, app),
+        Pane::Xsave => draw_xsave_content(pane_inner, f, app.cpuid_state()),
+        Pane::Dummy => draw_dummy_pane(pane_inner, f, app),
     };
 
-    let caption = "CPUID (c) | FPU (f) | XSAVE (x) | Quit (q)";
+    let caption = "CPUID (c) | FPU (f) | XSAVE (x) | Dummy (d) | Quit (q)";
     f.render_widget(caption, bottom_bar);
 
     max_scroll

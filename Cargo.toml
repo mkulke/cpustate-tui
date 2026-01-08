@@ -3,10 +3,6 @@ resolver = "3"
 members = ["kernel", "image"]
 
 [package]
-name = "basic-os"
+name = "cpu-debug"
 version = "0.1.0"
 edition = "2024"
-
-# [build-dependencies]
-# kernel = { path = "kernel", artifact = "bin", target = "x86_64-unknown-none" }
-# bootloader = "0.11.13"

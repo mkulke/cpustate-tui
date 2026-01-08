@@ -95,12 +95,20 @@ fn main_loop(port: &mut SerialPort) -> ! {
                         app.set_pane(Pane::Xsave);
                         needs_redraw = true;
                     }
+                    b'd' => {
+                        app.set_pane(Pane::Dummy);
+                        needs_redraw = true;
+                    }
                     b'j' => {
                         view.scroll_down(&mut app);
                         needs_redraw = true;
                     }
                     b'k' => {
                         view.scroll_up(&mut app);
+                        needs_redraw = true;
+                    }
+                    b'G' => {
+                        view.scroll_to_bottom(&mut app);
                         needs_redraw = true;
                     }
                     _ => {}

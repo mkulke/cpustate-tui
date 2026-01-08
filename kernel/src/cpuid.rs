@@ -1,10 +1,26 @@
 use alloc::vec::Vec;
 use raw_cpuid::{CpuId, CpuIdReaderNative};
 
+pub struct ExtendedStateFeatures {
+    supports: Vec<(&'static str, bool)>,
+    sizes: Vec<(&'static str, u32)>,
+}
+
+impl ExtendedStateFeatures {
+    pub fn supports(&self) -> &Vec<(&'static str, bool)> {
+        &self.supports
+    }
+
+    pub fn sizes(&self) -> &Vec<(&'static str, u32)> {
+        &self.sizes
+    }
+}
+
 pub struct CpuFeatures {
     vendor_info: VendorInfo,
     features: Vec<(&'static str, bool)>,
     extended_features: Vec<(&'static str, bool)>,
+    extended_state_features: ExtendedStateFeatures,
 }
 
 impl CpuFeatures {
@@ -12,11 +28,13 @@ impl CpuFeatures {
         let cpuid = CpuId::new();
         let features = build_features(&cpuid);
         let extended_features = build_extended_features(&cpuid);
+        let extended_state_features = build_extended_state_features(&cpuid);
         let vendor_info = build_vendor_info(&cpuid);
         CpuFeatures {
             vendor_info,
             features,
             extended_features,
+            extended_state_features,
         }
     }
 
@@ -30,6 +48,24 @@ impl CpuFeatures {
 
     pub fn extended_features(&self) -> &Vec<(&'static str, bool)> {
         &self.extended_features
+    }
+
+    pub fn extended_state_features(&self) -> &ExtendedStateFeatures {
+        &self.extended_state_features
+    }
+
+    pub fn has_xsave(&self) -> bool {
+        let cpuid = CpuId::new();
+        let fi = cpuid.get_feature_info().unwrap();
+        fi.has_xsave()
+    }
+
+    pub fn leaf(&self, leaf: u32, subleaf: u32) -> [u32; 4] {
+        // Directly query leaf 0xD subleaf 0
+        unsafe {
+            let result = core::arch::x86_64::__cpuid_count(leaf, subleaf);
+            [result.eax, result.ebx, result.ecx, result.edx]
+        }
     }
 }
 
@@ -52,6 +88,47 @@ fn build_vendor_info(cpuid: &CpuId<CpuIdReaderNative>) -> VendorInfo {
             amd: false,
         },
     }
+}
+
+fn build_extended_state_features(cpuid: &CpuId<CpuIdReaderNative>) -> ExtendedStateFeatures {
+    let esfi = cpuid.get_extended_state_info().unwrap();
+
+    let mut supports: Vec<(&str, bool)> = Vec::new();
+    macro_rules! push_supports {
+        ($m:ident) => {
+            let name = stringify!($m);
+            supports.push((name, esfi.$m()));
+        };
+    }
+
+    let mut sizes: Vec<(&str, u32)> = Vec::new();
+    macro_rules! push_size {
+        ($m:ident) => {
+            let name = stringify!($m);
+            sizes.push((name, esfi.$m()));
+        };
+    }
+
+    push_supports!(xcr0_supports_legacy_x87);
+    push_supports!(xcr0_supports_sse_128);
+    push_supports!(xcr0_supports_avx_256);
+    push_supports!(xcr0_supports_mpx_bndregs);
+    push_supports!(xcr0_supports_mpx_bndcsr);
+    push_supports!(xcr0_supports_avx512_opmask);
+    push_supports!(xcr0_supports_avx512_zmm_hi256);
+    push_supports!(xcr0_supports_avx512_zmm_hi16);
+    push_supports!(xcr0_supports_pkru);
+    push_supports!(ia32_xss_supports_pt);
+    push_supports!(ia32_xss_supports_hdc);
+    push_supports!(has_xsaveopt);
+    push_supports!(has_xsavec);
+    push_supports!(has_xsaves_xrstors);
+
+    push_size!(xsave_area_size_enabled_features);
+    push_size!(xsave_area_size_supported_features);
+    push_size!(xsave_size);
+
+    ExtendedStateFeatures { supports, sizes }
 }
 
 fn build_extended_features(cpuid: &CpuId<CpuIdReaderNative>) -> Vec<(&'static str, bool)> {
