@@ -558,9 +558,9 @@ checksum = "dc33ff2d4973d518d823d61aa239014831e521c75da58e3df4840d3f47749d09"
 
 [[package]]
 name = "ratatui"
-version = "0.30.0-beta.1"
+version = "0.30.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b0be4f05bef1694bc30cce0f3a13265d10224f0399d350233cfad5b1be4f8545"
+checksum = "d1ce67fb8ba4446454d1c8dbaeda0557ff5e94d39d5e5ed7f10a65eb4c8266bc"
 dependencies = [
  "instability",
  "ratatui-core",
@@ -569,9 +569,9 @@ dependencies = [
 
 [[package]]
 name = "ratatui-core"
-version = "0.1.0-beta.1"
+version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9b9832b952afc8f37675331e7718e6a57624a26a5d0fdc20340ddefde66a8dcf"
+checksum = "5ef8dea09a92caaf73bff7adb70b76162e5937524058a7e5bff37869cbbec293"
 dependencies = [
  "bitflags 2.10.0",
  "compact_str",
@@ -589,9 +589,9 @@ dependencies = [
 
 [[package]]
 name = "ratatui-widgets"
-version = "0.3.0-beta.1"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cb15c5f3d1b0b384c1891167461fa7584a31acae01df8b6e249c772cd284a622"
+checksum = "d7dbfa023cd4e604c2553483820c5fe8aa9d71a42eea5aa77c6e7f35756612db"
 dependencies = [
  "bitflags 2.10.0",
  "hashbrown",

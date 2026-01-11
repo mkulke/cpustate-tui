@@ -1,7 +1,7 @@
 use crate::irq_mutex::IrqMutex;
 use core::cell::RefCell;
 use heapless::spsc::Queue;
-use uart_16550::SerialPort;
+pub use uart_16550::SerialPort;
 use x86::io::inb;
 
 const COM1_BASE: u16 = 0x3F8;

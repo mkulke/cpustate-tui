@@ -1,55 +1,76 @@
+use alloc::format;
+use alloc::vec;
 use alloc::vec::Vec;
-use ratatui::style::Color;
+use core::fmt::LowerHex;
+use core::sync::atomic::Ordering;
+use x86_64::instructions;
 
+use crate::cpuid::{CpuFeatures, ExtendedStateFeatures, VendorInfo};
 use crate::fpu::{enable_sse, fxsave64, set_xmm0_bytes, set_xmm15_bytes, FxSaveAligned};
-use crate::cpuid::{CpuFeatures, VendorInfo, ExtendedStateFeatures};
+use crate::interrupts;
+use crate::qemu::{self, QemuExitCode};
+use crate::ratatui_backend::SerialAnsiBackend;
+use crate::serial::{self, SerialPort};
+
+use ratatui::buffer::Buffer;
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::style::{Color, Style};
+use ratatui::text::{Line, Text};
+use ratatui::widgets::{Block, Borders, Paragraph, Widget};
+use ratatui::Terminal;
+
+struct XmmBytes([u8; 16]);
+
+impl LowerHex for XmmBytes {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        for &b in self.0.iter().rev() {
+            write!(f, "{:02x}", b)?;
+        }
+        Ok(())
+    }
+}
 
 pub struct CpuidState {
-    y_offset: u16,
     features: CpuFeatures,
 }
 
 impl CpuidState {
     fn new() -> Self {
         let features = CpuFeatures::new();
-        let y_offset = 0;
 
-        Self {
-            y_offset,
-            features,
-        }
+        Self { features }
     }
 
-    pub fn features(&self) -> &Vec<(&'static str, bool)> {
+    fn features(&self) -> &Vec<(&'static str, bool)> {
         &self.features.features()
     }
 
-    pub fn extended_features(&self) -> &Vec<(&'static str, bool)> {
+    fn extended_features(&self) -> &Vec<(&'static str, bool)> {
         &self.features.extended_features()
     }
 
-    pub fn extended_state_features(&self) -> &ExtendedStateFeatures {
+    fn extended_state_features(&self) -> &ExtendedStateFeatures {
         &self.features.extended_state_features()
     }
 
-    pub fn vendor_info(&self) -> &VendorInfo {
+    fn vendor_info(&self) -> &VendorInfo {
         self.features.vendor_info()
     }
 
-    pub fn y_offset(&self) -> u16 {
-        self.y_offset
-    }
-
-    pub fn has_xsave(&self) -> bool {
+    fn has_xsave(&self) -> bool {
         self.features.has_xsave()
     }
 
-    pub fn leaf_0xd_0(&self) -> [u32; 4] {
+    fn leaf_0xd_0(&self) -> [u32; 4] {
         self.features.leaf(0xD, 0)
     }
 
-    pub fn leaf_0xd_1(&self) -> [u32; 4] {
+    fn leaf_0xd_1(&self) -> [u32; 4] {
         self.features.leaf(0xD, 1)
+    }
+
+    fn leaf_0x1_0(&self) -> [u32; 4] {
+        self.features.leaf(0x1, 0)
     }
 }
 
@@ -60,10 +81,22 @@ pub enum Pane {
     Dummy,
 }
 
+#[derive(Default)]
+struct PaneScrollHints {
+    max_offset: u16,
+    y_offset: u16,
+}
+
+#[derive(Default)]
+struct ScrollHints {
+    cpuid: PaneScrollHints,
+}
+
 pub struct App {
     color_idx: usize,
     pane: Pane,
     cpuid_state: CpuidState,
+    scroll_hints: ScrollHints,
 }
 
 fn write_xmm_values() {
@@ -77,6 +110,20 @@ fn write_xmm_values() {
     set_xmm15_bytes(&xmm);
 }
 
+enum InputEvent {
+    Quit,
+    ScrollToBottom,
+    ScrollUp,
+    ScrollDown,
+    SelectPane(Pane),
+}
+
+enum ScrollDirection {
+    Up,
+    Down,
+    Bottom,
+}
+
 impl App {
     pub fn new() -> Self {
         enable_sse();
@@ -88,18 +135,15 @@ impl App {
             color_idx: 0,
             pane: Pane::Cpuid,
             cpuid_state,
+            scroll_hints: ScrollHints::default(),
         }
     }
 
-    pub fn pane(&self) -> &Pane {
-        &self.pane
-    }
-
-    pub fn tick(&mut self) {
+    fn tick(&mut self) {
         self.color_idx = (self.color_idx + 1) % 8;
     }
 
-    pub fn color(&self) -> Color {
+    fn color(&self) -> Color {
         const COLORS: [Color; 8] = [
             Color::Magenta,
             Color::Red,
@@ -113,34 +157,30 @@ impl App {
         COLORS[self.color_idx]
     }
 
-    pub fn set_pane(&mut self, pane: Pane) {
-        self.pane = pane;
-    }
+    fn scroll(&mut self, direction: ScrollDirection) {
+        let Pane::Cpuid = self.pane else {
+            return;
+        };
 
-    pub fn scroll_up(&mut self) {
-        if let Pane::Cpuid = self.pane {
-            let offset = &mut self.cpuid_state.y_offset;
-            *offset = offset.saturating_sub(1);
-        }
-    }
+        let y_offset = &mut self.scroll_hints.cpuid.y_offset;
+        let max_offset = self.scroll_hints.cpuid.max_offset;
 
-    pub fn scroll_down(&mut self, max_offset: Option<u16>) {
-        if let Pane::Cpuid = self.pane {
-            let offset = &mut self.cpuid_state.y_offset;
-            if let Some(max) = max_offset && *offset == max {
-                return;
+        match direction {
+            ScrollDirection::Up => {
+                *y_offset = y_offset.saturating_sub(1);
             }
-            *offset = offset.saturating_add(1);
+            ScrollDirection::Down => {
+                if *y_offset < max_offset {
+                    *y_offset = y_offset.saturating_add(1);
+                }
+            }
+            ScrollDirection::Bottom => {
+                *y_offset = max_offset;
+            }
         }
     }
 
-    pub fn scroll_to(&mut self, offset: Option<u16>) {
-        if let Pane::Cpuid = self.pane {
-            self.cpuid_state.y_offset = offset.unwrap_or(0);
-        }
-    }
-
-    pub fn pane_title(&self) -> &'static str {
+    fn pane_title(&self) -> &'static str {
         match self.pane {
             Pane::Cpuid => "CPUID",
             Pane::Fpu => "FPU",
@@ -149,13 +189,231 @@ impl App {
         }
     }
 
-    pub fn fxsave64(&self) -> FxSaveAligned {
+    fn fxsave64(&self) -> FxSaveAligned {
         let mut area = FxSaveAligned::new_zeroed();
         fxsave64(&mut area);
         area
     }
 
-    pub fn cpuid_state(&self) -> &CpuidState {
-        &self.cpuid_state
+    fn handle_input(&mut self) -> Option<InputEvent> {
+        let mut event = None;
+
+        serial::RX_QUEUE.with(|queue| {
+            let mut queue = queue.borrow_mut();
+            let (_prod, mut cons) = queue.split();
+
+            if let Some(byte) = cons.dequeue() {
+                event = match byte {
+                    b'q' => Some(InputEvent::Quit),
+                    b'c' => Some(InputEvent::SelectPane(Pane::Cpuid)),
+                    b'f' => Some(InputEvent::SelectPane(Pane::Fpu)),
+                    b'x' => Some(InputEvent::SelectPane(Pane::Xsave)),
+                    b'd' => Some(InputEvent::SelectPane(Pane::Dummy)),
+                    b'j' => Some(InputEvent::ScrollDown),
+                    b'k' => Some(InputEvent::ScrollUp),
+                    b'G' => Some(InputEvent::ScrollToBottom),
+                    _ => None,
+                };
+            }
+        });
+
+        return event;
+    }
+
+    fn handle_ticks(&mut self) -> bool {
+        let n = interrupts::PRINT_EVENTS.swap(0, Ordering::AcqRel);
+        let mut update = false;
+        for _ in 0..n {
+            self.tick();
+            update = true;
+        }
+        update
+    }
+
+    fn draw(&mut self, terminal: &mut Terminal<SerialAnsiBackend<SerialPort>>) {
+        terminal
+            // self implements Widget
+            .draw(|frame| frame.render_widget(&mut *self, frame.area()))
+            .unwrap();
+    }
+
+    pub fn run(&mut self) -> ! {
+        let port = serial::port();
+        let backend = SerialAnsiBackend::new(port, 80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        // initial draw
+        self.draw(&mut terminal);
+
+        loop {
+            instructions::hlt();
+
+            let mut needs_redraw = self.handle_ticks();
+
+            let event = self.handle_input();
+            if let Some(event) = event {
+                match event {
+                    InputEvent::Quit => qemu::exit(QemuExitCode::Success),
+                    InputEvent::ScrollToBottom => self.scroll(ScrollDirection::Bottom),
+                    InputEvent::SelectPane(pane) => self.pane = pane,
+                    InputEvent::ScrollUp => self.scroll(ScrollDirection::Up),
+                    InputEvent::ScrollDown => self.scroll(ScrollDirection::Down),
+                }
+                needs_redraw = true;
+            }
+
+            if needs_redraw {
+                self.draw(&mut terminal);
+                needs_redraw = false;
+            }
+        }
+    }
+
+    fn render_dummy_pane(&self, area: Rect, buf: &mut Buffer) {
+        let [_, message_slot, _] = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Fill(1),
+                Constraint::Length(1),
+                Constraint::Fill(1),
+            ])
+            .areas(area);
+
+        let paragraph = Paragraph::new(Line::styled(
+            "Hello from Ratatui!",
+            Style::default().fg(self.color()),
+        ))
+        .centered();
+
+        paragraph.render(message_slot, buf);
+    }
+
+    fn render_fpu_pane(&self, area: Rect, buf: &mut Buffer) {
+        let fp_area = self.fxsave64();
+
+        let header = Line::styled("fxsave64", Style::default().bold());
+        let line = Line::raw(format!("mcxsr=0x{:x}", fp_area.0.mxcsr));
+        let mut text = vec![header, line];
+        for i in 0..16 {
+            let value = XmmBytes(fp_area.0.xmm[i]);
+            let line = format!("xmm{:02}={:x}", i, value);
+            text.push(Line::raw(line));
+        }
+
+        let paragraph = Paragraph::new(Text::from(text));
+        paragraph.render(area, buf);
+    }
+
+    fn render_xsave_pane(&self, area: Rect, buf: &mut Buffer) {
+        let state = &self.cpuid_state;
+        let line_1 = format!("Leaf 0x1 reports XSAVE: {}", state.has_xsave());
+        let [eax, ebx, ecx, edx] = state.leaf_0x1_0();
+        let line_2 = format!(
+            "Leaf 0x1:0 -> EAX={:08x} EBX={:08x} ECX={:08x} EDX={:08x}",
+            eax, ebx, ecx, edx
+        );
+        let [eax, ebx, ecx, edx] = state.leaf_0xd_0();
+        let line_3 = format!(
+            "Leaf 0xD:0 -> EAX={:08x} EBX={:08x} ECX={:08x} EDX={:08x}",
+            eax, ebx, ecx, edx
+        );
+        let [eax, ..] = state.leaf_0xd_1();
+        let line_4 = format!(
+            "Leaf 0xD:1 -> EAX={:08x} (bit 1 XSAVEC={})",
+            eax,
+            (eax >> 1) & 1
+        );
+
+        let lines = vec![line_1, line_2, line_3, line_4]
+            .into_iter()
+            .map(Line::raw)
+            .collect::<Vec<Line>>();
+        let paragraph = Paragraph::new(lines);
+
+        paragraph.render(area, buf);
+    }
+
+    fn render_cpuid_pane(&mut self, area: Rect, buf: &mut Buffer) {
+        let state = &self.cpuid_state;
+        let vendor_info = state.vendor_info();
+        let vendor_header: Line = Line::styled("CPU Vendor:", Style::default().bold());
+        let amd = if vendor_info.amd { "Yes" } else { "No" };
+        let amd_line = Line::raw(format!("{:<8} = {}", "AMD", amd));
+        let intel = if vendor_info.intel { "Yes" } else { "No" };
+        let intel_line = Line::raw(format!("{:<8} = {}", "Intel", intel));
+        let mut lines = vec![vendor_header, amd_line, intel_line];
+
+        let empty_line = Line::raw("");
+        lines.push(empty_line.clone());
+
+        let features_header = Line::styled("CPU Features:", Style::default().bold());
+        lines.push(features_header);
+        for feature in state.features() {
+            let yes_no = if feature.1 { "Yes" } else { "No" };
+            let line = Line::raw(format!("{:<16} = {}", feature.0, yes_no));
+            lines.push(line);
+        }
+
+        lines.push(empty_line.clone());
+
+        let extended_features_header = Line::styled("Extended Features:", Style::default().bold());
+        lines.push(extended_features_header);
+        for extended_feature in state.extended_features() {
+            let yes_no = if extended_feature.1 { "Yes" } else { "No" };
+            let line = Line::raw(format!("{:<16} = {}", extended_feature.0, yes_no));
+            lines.push(line);
+        }
+
+        lines.push(empty_line.clone());
+
+        let extended_state_features_header =
+            Line::styled("Extended State Features:", Style::default().bold());
+        lines.push(extended_state_features_header);
+        let esf = state.extended_state_features();
+        for feature in esf.supports() {
+            let yes_no = if feature.1 { "Yes" } else { "No" };
+            let line = Line::raw(format!("{:<30} = {}", feature.0, yes_no));
+            lines.push(line);
+        }
+
+        lines.push(empty_line);
+
+        for size_feature in esf.sizes() {
+            let line = Line::raw(format!("{:<34} = {} bytes", size_feature.0, size_feature.1));
+            lines.push(line);
+        }
+
+        let n_lines = lines.len();
+        let paragraph = Paragraph::new(lines).scroll((self.scroll_hints.cpuid.y_offset, 0));
+
+        paragraph.render(area, buf);
+
+        self.scroll_hints.cpuid.max_offset = (n_lines as u16).saturating_sub(area.height);
+    }
+}
+
+impl Widget for &mut App {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        let pane_block = Block::default()
+            .title(self.pane_title())
+            .borders(Borders::ALL);
+
+        let [pane_area, bottom_bar] = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Fill(1), Constraint::Length(1)])
+            .areas(area);
+
+        let block_inner = pane_block.inner(pane_area);
+        pane_block.render(pane_area, buf);
+
+        match self.pane {
+            Pane::Fpu => self.render_fpu_pane(block_inner, buf),
+            Pane::Xsave => self.render_xsave_pane(block_inner, buf),
+            Pane::Cpuid => self.render_cpuid_pane(block_inner, buf),
+            Pane::Dummy => self.render_dummy_pane(block_inner, buf),
+        }
+
+        let caption = "CPUID (c) | FPU (f) | XSAVE (x) | Dummy (d) | Quit (q)";
+        caption.render(bottom_bar, buf);
     }
 }
