@@ -3,6 +3,10 @@ name = "kernel"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+default = ["msr"]
+msr = []
+
 [dependencies]
 bootloader_api = "0.11.13"
 heapless = "0.9.2"

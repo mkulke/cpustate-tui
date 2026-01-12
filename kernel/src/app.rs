@@ -13,6 +13,7 @@ use crate::fpu::{
 };
 use crate::interrupts;
 use crate::lapic::{lapic_timer_freq_hz, TARGET_TIMER_HZ};
+#[cfg(feature = "msr")]
 use crate::msr::{self, MsrCategory};
 use crate::qemu::{self, QemuExitCode};
 use crate::ratatui_backend::SerialAnsiBackend;
@@ -105,6 +106,7 @@ pub enum Pane {
     Fpu,
     Xsave,
     Timer,
+    #[cfg(feature = "msr")]
     Msr,
 }
 
@@ -127,6 +129,7 @@ struct PaneScrollHints {
 struct ScrollHints {
     cpuid: PaneScrollHints,
     fpu: PaneScrollHints,
+    #[cfg(feature = "msr")]
     msr: PaneScrollHints,
 }
 
@@ -149,6 +152,7 @@ pub struct App {
     hue: u16,
     pane: Pane,
     cpuid_state: CpuidState,
+    #[cfg(feature = "msr")]
     msr_state: Vec<MsrCategory>,
     scroll_hints: ScrollHints,
     last_g_tick: Option<usize>,
@@ -210,12 +214,14 @@ impl App {
             enable_avx();
         }
 
+        #[cfg(feature = "msr")]
         let msr_state = msr::read_all_msrs();
 
         Self {
             hue: 0,
             pane: Pane::Cpuid,
             cpuid_state,
+            #[cfg(feature = "msr")]
             msr_state,
             scroll_hints: ScrollHints::default(),
             last_g_tick: None,
@@ -264,6 +270,7 @@ impl App {
                 self.scroll_hints.fpu.max_offset,
                 self.scroll_hints.fpu.page_height,
             ),
+            #[cfg(feature = "msr")]
             Pane::Msr => (
                 &mut self.scroll_hints.msr.y_offset,
                 self.scroll_hints.msr.max_offset,
@@ -302,6 +309,7 @@ impl App {
             Pane::Fpu => "FPU",
             Pane::Xsave => "XSAVE",
             Pane::Timer => "Timer",
+            #[cfg(feature = "msr")]
             Pane::Msr => "MSR",
         }
     }
@@ -345,13 +353,14 @@ impl App {
                 // Navigation mode input handling
                 event = match byte {
                     b'q' => Some(InputEvent::Quit),
-                    b'/' if self.pane == Pane::Cpuid || self.pane == Pane::Msr => {
-                        Some(InputEvent::EnterSearchMode)
-                    }
+                    b'/' if self.pane == Pane::Cpuid => Some(InputEvent::EnterSearchMode),
+                    #[cfg(feature = "msr")]
+                    b'/' if self.pane == Pane::Msr => Some(InputEvent::EnterSearchMode),
                     b'c' => Some(InputEvent::SelectPane(Pane::Cpuid)),
                     b'f' => Some(InputEvent::SelectPane(Pane::Fpu)),
                     b'x' => Some(InputEvent::SelectPane(Pane::Xsave)),
                     b't' => Some(InputEvent::SelectPane(Pane::Timer)),
+                    #[cfg(feature = "msr")]
                     b'm' => Some(InputEvent::SelectPane(Pane::Msr)),
                     b'j' => Some(InputEvent::ScrollDown),
                     b'k' => Some(InputEvent::ScrollUp),
@@ -411,6 +420,7 @@ impl App {
 
         match self.pane {
             Pane::Cpuid => self.perform_cpuid_search(&query),
+            #[cfg(feature = "msr")]
             Pane::Msr => self.perform_msr_search(&query),
             _ => {}
         }
@@ -454,6 +464,7 @@ impl App {
         }
     }
 
+    #[cfg(feature = "msr")]
     fn perform_msr_search(&mut self, query: &str) {
         // Build search index for MSR pane
         // Each category has: header line, N entry lines, empty line
@@ -489,6 +500,7 @@ impl App {
             Pane::Cpuid => {
                 self.scroll_hints.cpuid.y_offset = offset.min(self.scroll_hints.cpuid.max_offset);
             }
+            #[cfg(feature = "msr")]
             Pane::Msr => {
                 self.scroll_hints.msr.y_offset = offset.min(self.scroll_hints.msr.max_offset);
             }
@@ -504,6 +516,7 @@ impl App {
             Pane::Cpuid => {
                 self.scroll_hints.cpuid.y_offset = offset.min(self.scroll_hints.cpuid.max_offset);
             }
+            #[cfg(feature = "msr")]
             Pane::Msr => {
                 self.scroll_hints.msr.y_offset = offset.min(self.scroll_hints.msr.max_offset);
             }
@@ -692,6 +705,7 @@ impl App {
         paragraph.render(area, buf);
     }
 
+    #[cfg(feature = "msr")]
     fn render_msr_pane(&mut self, area: Rect, buf: &mut Buffer) {
         let mut lines: Vec<Line> = Vec::new();
         let num_categories = self.msr_state.len();
@@ -724,6 +738,7 @@ impl App {
     }
 
     /// Create a Line for MSR entry with search term highlighted
+    #[cfg(feature = "msr")]
     fn highlight_msr_line(&self, name: &str, address: u32, value: &str) -> Line<'_> {
         let suffix = format!(" (0x{:08X}) = {}", address, value);
 
@@ -882,6 +897,7 @@ impl Widget for &mut App {
             Pane::Xsave => self.render_xsave_pane(block_inner, buf),
             Pane::Cpuid => self.render_cpuid_pane(block_inner, buf),
             Pane::Timer => self.render_timer_pane(block_inner, buf),
+            #[cfg(feature = "msr")]
             Pane::Msr => self.render_msr_pane(block_inner, buf),
         }
 
@@ -903,7 +919,10 @@ impl Widget for &mut App {
             ]);
             search_line.render(bottom_bar, buf);
         } else {
+            #[cfg(feature = "msr")]
             let caption = "CPUID (c) | FPU (f) | XSAVE (x) | Timer (t) | MSR (m) | Quit (q)";
+            #[cfg(not(feature = "msr"))]
+            let caption = "CPUID (c) | FPU (f) | XSAVE (x) | Timer (t) | Quit (q)";
             caption.render(bottom_bar, buf);
         }
     }
