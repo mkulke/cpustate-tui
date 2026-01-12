@@ -6,7 +6,7 @@ use core::sync::atomic::Ordering;
 use x86_64::instructions;
 
 use crate::cpuid::{CpuFeatures, ExtendedStateFeatures, VendorInfo};
-use crate::fpu::{enable_sse, fxsave64, set_xmm0_bytes, set_xmm15_bytes, FxSaveAligned};
+use crate::fpu::{enable_avx, enable_sse, fxsave64, read_ymm_registers, set_xmm0_bytes, set_xmm15_bytes, FxSaveAligned, YmmRegisters};
 use crate::interrupts;
 use crate::qemu::{self, QemuExitCode};
 use crate::ratatui_backend::SerialAnsiBackend;
@@ -22,6 +22,17 @@ use ratatui::Terminal;
 struct XmmBytes([u8; 16]);
 
 impl LowerHex for XmmBytes {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        for &b in self.0.iter().rev() {
+            write!(f, "{:02x}", b)?;
+        }
+        Ok(())
+    }
+}
+
+struct YmmBytes([u8; 32]);
+
+impl LowerHex for YmmBytes {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         for &b in self.0.iter().rev() {
             write!(f, "{:02x}", b)?;
@@ -72,6 +83,10 @@ impl CpuidState {
     fn leaf_0x1_0(&self) -> [u32; 4] {
         self.features.leaf(0x1, 0)
     }
+
+    fn has_avx2(&self) -> bool {
+        self.features.has_avx2()
+    }
 }
 
 pub enum Pane {
@@ -90,6 +105,7 @@ struct PaneScrollHints {
 #[derive(Default)]
 struct ScrollHints {
     cpuid: PaneScrollHints,
+    fpu: PaneScrollHints,
 }
 
 pub struct App {
@@ -131,6 +147,11 @@ impl App {
 
         let cpuid_state = CpuidState::new();
 
+        // Enable AVX if the CPU supports AVX2
+        if cpuid_state.has_avx2() {
+            enable_avx();
+        }
+
         Self {
             color_idx: 0,
             pane: Pane::Cpuid,
@@ -158,12 +179,17 @@ impl App {
     }
 
     fn scroll(&mut self, direction: ScrollDirection) {
-        let Pane::Cpuid = self.pane else {
-            return;
+        let (y_offset, max_offset) = match self.pane {
+            Pane::Cpuid => (
+                &mut self.scroll_hints.cpuid.y_offset,
+                self.scroll_hints.cpuid.max_offset,
+            ),
+            Pane::Fpu => (
+                &mut self.scroll_hints.fpu.y_offset,
+                self.scroll_hints.fpu.max_offset,
+            ),
+            _ => return,
         };
-
-        let y_offset = &mut self.scroll_hints.cpuid.y_offset;
-        let max_offset = self.scroll_hints.cpuid.max_offset;
 
         match direction {
             ScrollDirection::Up => {
@@ -288,7 +314,7 @@ impl App {
         paragraph.render(message_slot, buf);
     }
 
-    fn render_fpu_pane(&self, area: Rect, buf: &mut Buffer) {
+    fn render_fpu_pane(&mut self, area: Rect, buf: &mut Buffer) {
         let fp_area = self.fxsave64();
 
         let header = Line::styled("fxsave64", Style::default().bold());
@@ -300,8 +326,24 @@ impl App {
             text.push(Line::raw(line));
         }
 
-        let paragraph = Paragraph::new(Text::from(text));
+        // Display YMM registers if AVX2 is available
+        if self.cpuid_state.has_avx2() {
+            text.push(Line::raw(""));
+            text.push(Line::styled("AVX2 YMM Registers", Style::default().bold()));
+            let mut ymm_regs = YmmRegisters::new_zeroed();
+            read_ymm_registers(&mut ymm_regs);
+            for i in 0..16 {
+                let value = YmmBytes(ymm_regs.ymm[i]);
+                let line = format!("ymm{:02}={:x}", i, value);
+                text.push(Line::raw(line));
+            }
+        }
+
+        let n_lines = text.len();
+        let paragraph = Paragraph::new(Text::from(text)).scroll((self.scroll_hints.fpu.y_offset, 0));
         paragraph.render(area, buf);
+
+        self.scroll_hints.fpu.max_offset = (n_lines as u16).saturating_sub(area.height);
     }
 
     fn render_xsave_pane(&self, area: Rect, buf: &mut Buffer) {

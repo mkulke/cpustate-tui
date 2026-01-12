@@ -1,5 +1,6 @@
 use core::arch::asm;
 use x86_64::registers::control::{Cr0, Cr0Flags, Cr4, Cr4Flags};
+use x86_64::registers::xcontrol::{XCr0, XCr0Flags};
 
 #[inline(always)]
 pub fn enable_sse() {
@@ -21,6 +22,23 @@ pub fn enable_sse() {
         cr4.insert(Cr4Flags::OSFXSR);
         cr4.insert(Cr4Flags::OSXMMEXCPT_ENABLE);
         Cr4::write(cr4);
+    }
+}
+
+#[inline(always)]
+pub fn enable_avx() {
+    unsafe {
+        // Enable OSXSAVE in CR4 to allow XCR0 access
+        let mut cr4 = Cr4::read();
+        cr4.insert(Cr4Flags::OSXSAVE);
+        Cr4::write(cr4);
+
+        // Enable AVX state (YMM registers) in XCR0
+        let mut xcr0 = XCr0::read();
+        xcr0.insert(XCr0Flags::X87);
+        xcr0.insert(XCr0Flags::SSE);
+        xcr0.insert(XCr0Flags::AVX);
+        XCr0::write(xcr0);
     }
 }
 
@@ -94,6 +112,45 @@ pub fn set_xmm15_bytes(v: &[u8; 16]) {
         asm!(
             "movdqu xmm15, [{p}]",
             p = in(reg) v.as_ptr(),
+            options(nostack, preserves_flags),
+        );
+    }
+}
+
+/// YMM registers (256-bit) for AVX/AVX2
+#[repr(C, align(32))]
+pub struct YmmRegisters {
+    pub ymm: [[u8; 32]; 16],
+}
+
+impl YmmRegisters {
+    pub const fn new_zeroed() -> Self {
+        Self { ymm: [[0; 32]; 16] }
+    }
+}
+
+/// Read all 16 YMM registers using vmovdqu
+#[inline(always)]
+pub fn read_ymm_registers(out: &mut YmmRegisters) {
+    unsafe {
+        asm!(
+            "vmovdqu [{ptr}], ymm0",
+            "vmovdqu [{ptr} + 32], ymm1",
+            "vmovdqu [{ptr} + 64], ymm2",
+            "vmovdqu [{ptr} + 96], ymm3",
+            "vmovdqu [{ptr} + 128], ymm4",
+            "vmovdqu [{ptr} + 160], ymm5",
+            "vmovdqu [{ptr} + 192], ymm6",
+            "vmovdqu [{ptr} + 224], ymm7",
+            "vmovdqu [{ptr} + 256], ymm8",
+            "vmovdqu [{ptr} + 288], ymm9",
+            "vmovdqu [{ptr} + 320], ymm10",
+            "vmovdqu [{ptr} + 352], ymm11",
+            "vmovdqu [{ptr} + 384], ymm12",
+            "vmovdqu [{ptr} + 416], ymm13",
+            "vmovdqu [{ptr} + 448], ymm14",
+            "vmovdqu [{ptr} + 480], ymm15",
+            ptr = in(reg) out as *mut YmmRegisters,
             options(nostack, preserves_flags),
         );
     }
