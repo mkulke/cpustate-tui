@@ -98,6 +98,10 @@ impl CpuidState {
     fn leaf(&self, leaf: u32, subleaf: u32) -> [u32; 4] {
         self.features.leaf(leaf, subleaf)
     }
+
+    fn cpu_features(&self) -> &CpuFeatures {
+        &self.features
+    }
 }
 
 #[derive(PartialEq)]
@@ -215,7 +219,7 @@ impl App {
         }
 
         #[cfg(feature = "msr")]
-        let msr_state = msr::read_all_msrs();
+        let msr_state = msr::read_all_msrs(cpuid_state.cpu_features());
 
         Self {
             hue: 0,

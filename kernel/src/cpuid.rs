@@ -74,6 +74,43 @@ impl CpuFeatures {
             [result.eax, result.ebx, result.ecx, result.edx]
         }
     }
+
+    // MSR-related feature checks
+    pub fn has_mtrr(&self) -> bool {
+        self.cpuid
+            .get_feature_info()
+            .is_some_and(|fi| fi.has_mtrr())
+    }
+
+    pub fn has_pat(&self) -> bool {
+        self.cpuid
+            .get_feature_info()
+            .is_some_and(|fi| fi.has_pat())
+    }
+
+    pub fn has_mce(&self) -> bool {
+        self.cpuid
+            .get_feature_info()
+            .is_some_and(|fi| fi.has_mce())
+    }
+
+    pub fn has_mca(&self) -> bool {
+        self.cpuid
+            .get_feature_info()
+            .is_some_and(|fi| fi.has_mca())
+    }
+
+    pub fn has_rdtscp(&self) -> bool {
+        self.cpuid
+            .get_extended_processor_and_feature_identifiers()
+            .is_some_and(|efi| efi.has_rdtscp())
+    }
+
+    pub fn has_tsc_adjust(&self) -> bool {
+        self.cpuid
+            .get_extended_feature_info()
+            .is_some_and(|efi| efi.has_tsc_adjust_msr())
+    }
 }
 
 /// Returns TSC frequency in Hz from CPUID leaf 0x15, or processor base
