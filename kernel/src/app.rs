@@ -101,6 +101,7 @@ pub enum Pane {
 struct PaneScrollHints {
     max_offset: u16,
     y_offset: u16,
+    page_height: u16,
 }
 
 #[derive(Default)]
@@ -134,6 +135,8 @@ enum InputEvent {
     ScrollToBottom,
     ScrollUp,
     ScrollDown,
+    PageUp,
+    PageDown,
     SelectPane(Pane),
 }
 
@@ -142,6 +145,8 @@ enum ScrollDirection {
     Down,
     Top,
     Bottom,
+    PageUp,
+    PageDown,
 }
 
 /// Max ticks between two 'g' presses to trigger gg (500ms at TARGET_TIMER_HZ)
@@ -187,14 +192,16 @@ impl App {
     }
 
     fn scroll(&mut self, direction: ScrollDirection) {
-        let (y_offset, max_offset) = match self.pane {
+        let (y_offset, max_offset, page_height) = match self.pane {
             Pane::Cpuid => (
                 &mut self.scroll_hints.cpuid.y_offset,
                 self.scroll_hints.cpuid.max_offset,
+                self.scroll_hints.cpuid.page_height,
             ),
             Pane::Fpu => (
                 &mut self.scroll_hints.fpu.y_offset,
                 self.scroll_hints.fpu.max_offset,
+                self.scroll_hints.fpu.page_height,
             ),
             _ => return,
         };
@@ -213,6 +220,12 @@ impl App {
             }
             ScrollDirection::Bottom => {
                 *y_offset = max_offset;
+            }
+            ScrollDirection::PageUp => {
+                *y_offset = y_offset.saturating_sub(page_height);
+            }
+            ScrollDirection::PageDown => {
+                *y_offset = (*y_offset + page_height).min(max_offset);
             }
         }
     }
@@ -252,6 +265,8 @@ impl App {
                 b'j' => Some(InputEvent::ScrollDown),
                 b'k' => Some(InputEvent::ScrollUp),
                 b'G' => Some(InputEvent::ScrollToBottom),
+                0x06 => Some(InputEvent::PageDown), // Ctrl+F
+                0x02 => Some(InputEvent::PageUp),   // Ctrl+B
                 b'g' => {
                     let now = interrupts::tick_count();
                     let Some(last) = self.last_g_tick else {
@@ -309,6 +324,8 @@ impl App {
                     InputEvent::Quit => qemu::exit(QemuExitCode::Success),
                     InputEvent::ScrollToTop => self.scroll(ScrollDirection::Top),
                     InputEvent::ScrollToBottom => self.scroll(ScrollDirection::Bottom),
+                    InputEvent::PageUp => self.scroll(ScrollDirection::PageUp),
+                    InputEvent::PageDown => self.scroll(ScrollDirection::PageDown),
                     InputEvent::SelectPane(pane) => self.pane = pane,
                     InputEvent::ScrollUp => self.scroll(ScrollDirection::Up),
                     InputEvent::ScrollDown => self.scroll(ScrollDirection::Down),
@@ -372,6 +389,7 @@ impl App {
         paragraph.render(area, buf);
 
         self.scroll_hints.fpu.max_offset = (n_lines as u16).saturating_sub(area.height);
+        self.scroll_hints.fpu.page_height = area.height.saturating_sub(2);
     }
 
     fn render_xsave_pane(&self, area: Rect, buf: &mut Buffer) {
@@ -459,6 +477,7 @@ impl App {
         paragraph.render(area, buf);
 
         self.scroll_hints.cpuid.max_offset = (n_lines as u16).saturating_sub(area.height);
+        self.scroll_hints.cpuid.page_height = area.height.saturating_sub(2);
     }
 }
 
