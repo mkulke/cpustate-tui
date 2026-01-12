@@ -1,16 +1,20 @@
-CARGO_FILES = Cargo.toml image/Cargo.toml kernel/Cargo.toml Cargo.lock
-BUILD_FILES = $(CARGO_FILES) kernel/src/*.rs image/build.rs
+CARGO_FILES = Cargo.toml image/Cargo.toml kernel/Cargo.toml search/Cargo.toml Cargo.lock
+BUILD_FILES = $(CARGO_FILES) kernel/src/*.rs image/build.rs search/src/*.rs
 CPU_MODEL ?= host
 
-.PHONY:
-all: bios.img
+.PHONY: all
+all: test bios.img
 
-.PHONY:
+.PHONY: test
+test:
+	cargo test --workspace --exclude kernel
+
+.PHONY: bios.img
 bios.img: $(BUILD_FILES)
 	cargo build -p image --release && \
     cp $$(ls -t target/release/build/image-*/out/bios.img | head -1) $@
 
-.PHONY:
+.PHONY: run
 run: bios.img
 	qemu-system-x86_64 \
 		-cpu $(CPU_MODEL) \

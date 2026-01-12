@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["kernel", "image"]
+members = ["kernel", "image", "search"]
 
 [package]
 name = "cpu-debug"

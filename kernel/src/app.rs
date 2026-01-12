@@ -1,4 +1,5 @@
 use alloc::format;
+use alloc::string::{String, ToString};
 use alloc::vec;
 use alloc::vec::Vec;
 use core::fmt::LowerHex;
@@ -57,15 +58,15 @@ impl CpuidState {
     }
 
     fn features(&self) -> &Vec<(&'static str, bool)> {
-        &self.features.features()
+        self.features.features()
     }
 
     fn extended_features(&self) -> &Vec<(&'static str, bool)> {
-        &self.features.extended_features()
+        self.features.extended_features()
     }
 
     fn extended_state_features(&self) -> &ExtendedStateFeatures {
-        &self.features.extended_state_features()
+        self.features.extended_state_features()
     }
 
     fn vendor_info(&self) -> &VendorInfo {
@@ -97,11 +98,20 @@ impl CpuidState {
     }
 }
 
+#[derive(PartialEq)]
 pub enum Pane {
     Cpuid,
     Fpu,
     Xsave,
     Timer,
+}
+
+#[derive(Default, PartialEq)]
+enum Mode {
+    #[default]
+    Navigation,
+    Search,
+    SearchResults,
 }
 
 #[derive(Default)]
@@ -117,12 +127,30 @@ struct ScrollHints {
     fpu: PaneScrollHints,
 }
 
+/// Minimum characters before search activates
+const MIN_SEARCH_LEN: usize = 2;
+
+struct SearchState {
+    inner: search::SearchState,
+}
+
+impl Default for SearchState {
+    fn default() -> Self {
+        Self {
+            inner: search::SearchState::default(),
+        }
+    }
+}
+
 pub struct App {
     hue: u16,
     pane: Pane,
     cpuid_state: CpuidState,
     scroll_hints: ScrollHints,
     last_g_tick: Option<usize>,
+    mode: Mode,
+    search_buffer: String,
+    search_state: SearchState,
 }
 
 fn write_xmm_values() {
@@ -145,6 +173,13 @@ enum InputEvent {
     PageUp,
     PageDown,
     SelectPane(Pane),
+    EnterSearchMode,
+    ConfirmSearch,
+    ExitSearchMode,
+    SearchInput(u8),
+    SearchBackspace,
+    NextMatch,
+    PrevMatch,
 }
 
 enum ScrollDirection {
@@ -177,6 +212,9 @@ impl App {
             cpuid_state,
             scroll_hints: ScrollHints::default(),
             last_g_tick: None,
+            mode: Mode::default(),
+            search_buffer: String::new(),
+            search_state: SearchState::default(),
         }
     }
 
@@ -272,33 +310,55 @@ impl App {
                 return;
             };
 
-            event = match byte {
-                b'q' => Some(InputEvent::Quit),
-                b'c' => Some(InputEvent::SelectPane(Pane::Cpuid)),
-                b'f' => Some(InputEvent::SelectPane(Pane::Fpu)),
-                b'x' => Some(InputEvent::SelectPane(Pane::Xsave)),
-                b't' => Some(InputEvent::SelectPane(Pane::Timer)),
-                b'j' => Some(InputEvent::ScrollDown),
-                b'k' => Some(InputEvent::ScrollUp),
-                b'G' => Some(InputEvent::ScrollToBottom),
-                0x06 => Some(InputEvent::PageDown), // Ctrl+F
-                0x02 => Some(InputEvent::PageUp),   // Ctrl+B
-                b'g' => {
-                    let now = interrupts::tick_count();
-                    let Some(last) = self.last_g_tick else {
-                        self.last_g_tick = Some(now);
-                        return;
-                    };
-                    if now.saturating_sub(last) <= GG_TIMEOUT_TICKS {
-                        self.last_g_tick = None;
-                        Some(InputEvent::ScrollToTop)
-                    } else {
-                        self.last_g_tick = Some(now);
-                        None
+            if self.mode == Mode::Search {
+                // Search input mode - typing in search bar
+                event = match byte {
+                    0x1B => Some(InputEvent::ExitSearchMode), // ESC
+                    0x7F | 0x08 => Some(InputEvent::SearchBackspace), // Backspace/DEL
+                    0x0D => Some(InputEvent::ConfirmSearch), // Enter - confirm and go to results mode
+                    b if b >= 0x20 && b < 0x7F => Some(InputEvent::SearchInput(b)), // Printable ASCII
+                    _ => None,
+                };
+            } else if self.mode == Mode::SearchResults {
+                // Search results mode - n/N navigation, ESC/Enter to exit
+                event = match byte {
+                    0x1B | 0x0D => Some(InputEvent::ExitSearchMode), // ESC or Enter exits to Navigation
+                    b'n' => Some(InputEvent::NextMatch),
+                    b'N' => Some(InputEvent::PrevMatch),
+                    b'/' => Some(InputEvent::EnterSearchMode), // Start new search
+                    _ => None,
+                };
+            } else {
+                // Navigation mode input handling
+                event = match byte {
+                    b'q' => Some(InputEvent::Quit),
+                    b'/' if self.pane == Pane::Cpuid => Some(InputEvent::EnterSearchMode),
+                    b'c' => Some(InputEvent::SelectPane(Pane::Cpuid)),
+                    b'f' => Some(InputEvent::SelectPane(Pane::Fpu)),
+                    b'x' => Some(InputEvent::SelectPane(Pane::Xsave)),
+                    b't' => Some(InputEvent::SelectPane(Pane::Timer)),
+                    b'j' => Some(InputEvent::ScrollDown),
+                    b'k' => Some(InputEvent::ScrollUp),
+                    b'G' => Some(InputEvent::ScrollToBottom),
+                    0x06 => Some(InputEvent::PageDown), // Ctrl+F
+                    0x02 => Some(InputEvent::PageUp),   // Ctrl+B
+                    b'g' => {
+                        let now = interrupts::tick_count();
+                        let Some(last) = self.last_g_tick else {
+                            self.last_g_tick = Some(now);
+                            return;
+                        };
+                        if now.saturating_sub(last) <= GG_TIMEOUT_TICKS {
+                            self.last_g_tick = None;
+                            Some(InputEvent::ScrollToTop)
+                        } else {
+                            self.last_g_tick = Some(now);
+                            None
+                        }
                     }
-                }
-                _ => None,
-            };
+                    _ => None,
+                };
+            }
         });
 
         event
@@ -312,6 +372,75 @@ impl App {
 
         let second_events = interrupts::SECOND_EVENTS.swap(0, Ordering::AcqRel);
         color_events > 0 || second_events > 0
+    }
+
+    /// Perform search on CPUID features, updating matches and scrolling to first match
+    fn perform_search(&mut self) {
+        let query = self.search_buffer.to_lowercase();
+
+        // Check minimum length
+        if query.len() < MIN_SEARCH_LEN {
+            self.search_state.inner.matches.clear();
+            return;
+        }
+
+        // Skip if query hasn't changed
+        if query == self.search_state.inner.last_query {
+            return;
+        }
+
+        self.search_state.inner.last_query = query.clone();
+        self.search_state.inner.matches.clear();
+        self.search_state.inner.current_match = 0;
+
+        // Build search index: line numbers where features match
+        // Line structure in CPUID pane:
+        // 0: vendor header, 1: amd, 2: intel, 3: empty
+        // 4: features header, 5+: features...
+        let mut line: u16 = 5; // Start after vendor section + features header
+
+        // Features
+        self.search_state.inner.matches.extend(search::find_matches(
+            &query,
+            self.cpuid_state.features(),
+            line,
+        ));
+        line += self.cpuid_state.features().len() as u16;
+
+        // Empty line + extended features header
+        line += 2;
+        self.search_state.inner.matches.extend(search::find_matches(
+            &query,
+            self.cpuid_state.extended_features(),
+            line,
+        ));
+        line += self.cpuid_state.extended_features().len() as u16;
+
+        // Empty line + extended state features header
+        line += 2;
+        self.search_state.inner.matches.extend(search::find_matches(
+            &query,
+            self.cpuid_state.extended_state_features().supports(),
+            line,
+        ));
+
+        // Jump to first match if any
+        if let Some(&first) = self.search_state.inner.matches.first() {
+            self.scroll_hints.cpuid.y_offset = first;
+        }
+    }
+
+    fn next_match(&mut self) {
+        if let Some(offset) = self.search_state.inner.next() {
+            // Clamp to max_offset to avoid scrolling past content
+            self.scroll_hints.cpuid.y_offset = offset.min(self.scroll_hints.cpuid.max_offset);
+        }
+    }
+
+    fn prev_match(&mut self) {
+        if let Some(offset) = self.search_state.inner.prev() {
+            self.scroll_hints.cpuid.y_offset = offset.min(self.scroll_hints.cpuid.max_offset);
+        }
     }
 
     fn draw(&mut self, terminal: &mut Terminal<SerialAnsiBackend<SerialPort>>) {
@@ -345,6 +474,30 @@ impl App {
                     InputEvent::SelectPane(pane) => self.pane = pane,
                     InputEvent::ScrollUp => self.scroll(ScrollDirection::Up),
                     InputEvent::ScrollDown => self.scroll(ScrollDirection::Down),
+                    InputEvent::EnterSearchMode => {
+                        self.mode = Mode::Search;
+                        self.search_buffer.clear();
+                        self.search_state.inner.clear();
+                    }
+                    InputEvent::ConfirmSearch => {
+                        self.mode = Mode::SearchResults;
+                    }
+                    InputEvent::ExitSearchMode => {
+                        self.mode = Mode::Navigation;
+                    }
+                    InputEvent::SearchInput(b) => {
+                        // Limit search buffer length (leave room for "/" prefix)
+                        if self.search_buffer.len() < 76 {
+                            self.search_buffer.push(b as char);
+                            self.perform_search();
+                        }
+                    }
+                    InputEvent::SearchBackspace => {
+                        self.search_buffer.pop();
+                        self.perform_search();
+                    }
+                    InputEvent::NextMatch => self.next_match(),
+                    InputEvent::PrevMatch => self.prev_match(),
                 }
                 needs_redraw = true;
             }
@@ -471,6 +624,39 @@ impl App {
         paragraph.render(area, buf);
     }
 
+    /// Create a Line with search term highlighted (only in Search/SearchResults mode)
+    fn highlight_line(&self, name: &str, value: &str, width: usize) -> Line<'_> {
+        // Only highlight in Search or SearchResults mode
+        if self.mode != Mode::Search && self.mode != Mode::SearchResults {
+            return Line::raw(format!("{:<width$} = {}", name, value, width = width));
+        }
+
+        let query = self.search_buffer.to_lowercase();
+        let name_lower = name.to_lowercase();
+
+        if query.len() >= MIN_SEARCH_LEN && name_lower.contains(query.as_str()) {
+            // Find match position
+            if let Some(pos) = name_lower.find(query.as_str()) {
+                let before = &name[..pos];
+                let matched = &name[pos..pos + query.len()];
+                let after = &name[pos + query.len()..];
+                
+                // Pad to width
+                let padding = width.saturating_sub(name.len());
+                let padded_after = format!("{}{}", after, " ".repeat(padding));
+                
+                return Line::from(vec![
+                    Span::raw(before.to_string()),
+                    Span::styled(matched.to_string(), Style::default().fg(Color::Black).bg(Color::Yellow)),
+                    Span::raw(padded_after),
+                    Span::raw(format!(" = {}", value)),
+                ]);
+            }
+        }
+
+        Line::raw(format!("{:<width$} = {}", name, value, width = width))
+    }
+
     fn render_cpuid_pane(&mut self, area: Rect, buf: &mut Buffer) {
         let state = &self.cpuid_state;
         let vendor_info = state.vendor_info();
@@ -486,20 +672,18 @@ impl App {
 
         let features_header = Line::styled("CPU Features:", Style::default().bold());
         lines.push(features_header);
-        for feature in state.features() {
+        for feature in state.features().clone() {
             let yes_no = if feature.1 { "Yes" } else { "No" };
-            let line = Line::raw(format!("{:<16} = {}", feature.0, yes_no));
-            lines.push(line);
+            lines.push(self.highlight_line(feature.0, yes_no, 16));
         }
 
         lines.push(empty_line.clone());
 
         let extended_features_header = Line::styled("Extended Features:", Style::default().bold());
         lines.push(extended_features_header);
-        for extended_feature in state.extended_features() {
+        for extended_feature in state.extended_features().clone() {
             let yes_no = if extended_feature.1 { "Yes" } else { "No" };
-            let line = Line::raw(format!("{:<16} = {}", extended_feature.0, yes_no));
-            lines.push(line);
+            lines.push(self.highlight_line(extended_feature.0, yes_no, 16));
         }
 
         lines.push(empty_line.clone());
@@ -508,10 +692,9 @@ impl App {
             Line::styled("Extended State Features:", Style::default().bold());
         lines.push(extended_state_features_header);
         let esf = state.extended_state_features();
-        for feature in esf.supports() {
+        for feature in esf.supports().clone() {
             let yes_no = if feature.1 { "Yes" } else { "No" };
-            let line = Line::raw(format!("{:<30} = {}", feature.0, yes_no));
-            lines.push(line);
+            lines.push(self.highlight_line(feature.0, yes_no, 30));
         }
 
         lines.push(empty_line);
@@ -552,7 +735,26 @@ impl Widget for &mut App {
             Pane::Timer => self.render_timer_pane(block_inner, buf),
         }
 
-        let caption = "CPUID (c) | FPU (f) | XSAVE (x) | Timer (t) | Quit (q)";
-        caption.render(bottom_bar, buf);
+        if self.mode == Mode::Search {
+            let search_line = Line::from(vec![
+                Span::styled("/", Style::default().bold()),
+                Span::raw(self.search_buffer.as_str()),
+                Span::styled("_", Style::default().fg(Color::Gray)), // cursor
+            ]);
+            search_line.render(bottom_bar, buf);
+        } else if self.mode == Mode::SearchResults {
+            // Show search bar without cursor, indicate n/N navigation
+            let match_count = self.search_state.inner.matches.len();
+            let current = self.search_state.inner.current_match + 1;
+            let search_line = Line::from(vec![
+                Span::styled("/", Style::default().bold()),
+                Span::raw(self.search_buffer.as_str()),
+                Span::styled(format!(" [{}/{}]", current, match_count), Style::default().fg(Color::DarkGray)),
+            ]);
+            search_line.render(bottom_bar, buf);
+        } else {
+            let caption = "CPUID (c) | FPU (f) | XSAVE (x) | Timer (t) | Quit (q)";
+            caption.render(bottom_bar, buf);
+        }
     }
 }

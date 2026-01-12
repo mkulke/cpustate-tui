@@ -15,3 +15,4 @@ x86 = "0.52.0"
 x86_64 = "0.15.2"
 ratatui = { version = "0.30.0", default-features = false }
 raw-cpuid = "11.6.0"
+search = { path = "../search", default-features = false }
