@@ -1,5 +1,6 @@
 CARGO_FILES = Cargo.toml image/Cargo.toml kernel/Cargo.toml Cargo.lock
 BUILD_FILES = $(CARGO_FILES) kernel/src/*.rs image/build.rs
+CPU_MODEL ?= host
 
 .PHONY:
 all: bios.img
@@ -12,7 +13,7 @@ bios.img: $(BUILD_FILES)
 .PHONY:
 run: bios.img
 	qemu-system-x86_64 \
-		-cpu qemu64 \
+		-cpu $(CPU_MODEL) \
 		-nographic \
 		-no-reboot \
 		-drive format=raw,file=$(CURDIR)/bios.img \
