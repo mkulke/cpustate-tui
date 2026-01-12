@@ -12,8 +12,8 @@ static TICK_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static PRINT_EVENTS: AtomicUsize = AtomicUsize::new(0);
 pub static SECOND_EVENTS: AtomicUsize = AtomicUsize::new(0);
 
-/// Ticks per color change (2 seconds at TARGET_TIMER_HZ)
-const TICKS_PER_EVENT: usize = (TARGET_TIMER_HZ * 2) as usize;
+/// Ticks per color change (500ms at TARGET_TIMER_HZ)
+const TICKS_PER_EVENT: usize = (TARGET_TIMER_HZ / 2) as usize;
 
 /// Ticks per second
 const TICKS_PER_SECOND: usize = TARGET_TIMER_HZ as usize;

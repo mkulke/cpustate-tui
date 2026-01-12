@@ -118,7 +118,7 @@ struct ScrollHints {
 }
 
 pub struct App {
-    color_idx: usize,
+    hue: u16,
     pane: Pane,
     cpuid_state: CpuidState,
     scroll_hints: ScrollHints,
@@ -172,7 +172,7 @@ impl App {
         }
 
         Self {
-            color_idx: 0,
+            hue: 0,
             pane: Pane::Cpuid,
             cpuid_state,
             scroll_hints: ScrollHints::default(),
@@ -181,21 +181,30 @@ impl App {
     }
 
     fn tick(&mut self) {
-        self.color_idx = (self.color_idx + 1) % 8;
+        // Advance hue by 5 degrees every 500ms (full cycle in 72 ticks = 36 seconds)
+        self.hue = (self.hue + 5) % 360;
+    }
+
+    /// Convert HSV to RGB. Hue: 0-359, Saturation/Value: fixed at 1.0 for vibrant colors.
+    fn hsv_to_rgb(hue: u16) -> (u8, u8, u8) {
+        let h = hue % 360;
+        let sector = h / 60;
+        let f = (h % 60) as u32 * 255 / 60; // fractional part scaled to 0-255
+
+        let (r, g, b) = match sector {
+            0 => (255, f as u8, 0),           // Red -> Yellow
+            1 => (255 - f as u8, 255, 0),     // Yellow -> Green
+            2 => (0, 255, f as u8),           // Green -> Cyan
+            3 => (0, 255 - f as u8, 255),     // Cyan -> Blue
+            4 => (f as u8, 0, 255),           // Blue -> Magenta
+            _ => (255, 0, 255 - f as u8),     // Magenta -> Red
+        };
+        (r, g, b)
     }
 
     fn color(&self) -> Color {
-        const COLORS: [Color; 8] = [
-            Color::Magenta,
-            Color::Red,
-            Color::Yellow,
-            Color::Blue,
-            Color::White,
-            Color::Cyan,
-            Color::Green,
-            Color::DarkGray,
-        ];
-        COLORS[self.color_idx]
+        let (r, g, b) = Self::hsv_to_rgb(self.hue);
+        Color::Rgb(r, g, b)
     }
 
     fn scroll(&mut self, direction: ScrollDirection) {
