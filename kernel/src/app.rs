@@ -5,10 +5,10 @@ use core::fmt::LowerHex;
 use core::sync::atomic::Ordering;
 use x86_64::instructions;
 
-use crate::cpuid::{CpuFeatures, ExtendedStateFeatures, VendorInfo};
+use crate::cpuid::{self, CpuFeatures, ExtendedStateFeatures, VendorInfo};
 use crate::fpu::{enable_avx, enable_sse, fxsave64, read_ymm_registers, set_xmm0_bytes, set_xmm15_bytes, FxSaveAligned, YmmRegisters};
 use crate::interrupts;
-use crate::lapic::TARGET_TIMER_HZ;
+use crate::lapic::{lapic_timer_freq_hz, TARGET_TIMER_HZ};
 use crate::qemu::{self, QemuExitCode};
 use crate::ratatui_backend::SerialAnsiBackend;
 use crate::serial::{self, SerialPort};
@@ -94,7 +94,7 @@ pub enum Pane {
     Cpuid,
     Fpu,
     Xsave,
-    Dummy,
+    Timer,
 }
 
 #[derive(Default)]
@@ -235,7 +235,7 @@ impl App {
             Pane::Cpuid => "CPUID",
             Pane::Fpu => "FPU",
             Pane::Xsave => "XSAVE",
-            Pane::Dummy => "Dummy",
+            Pane::Timer => "Timer",
         }
     }
 
@@ -261,7 +261,7 @@ impl App {
                 b'c' => Some(InputEvent::SelectPane(Pane::Cpuid)),
                 b'f' => Some(InputEvent::SelectPane(Pane::Fpu)),
                 b'x' => Some(InputEvent::SelectPane(Pane::Xsave)),
-                b'd' => Some(InputEvent::SelectPane(Pane::Dummy)),
+                b't' => Some(InputEvent::SelectPane(Pane::Timer)),
                 b'j' => Some(InputEvent::ScrollDown),
                 b'k' => Some(InputEvent::ScrollUp),
                 b'G' => Some(InputEvent::ScrollToBottom),
@@ -340,23 +340,36 @@ impl App {
         }
     }
 
-    fn render_dummy_pane(&self, area: Rect, buf: &mut Buffer) {
-        let [_, message_slot, _] = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Fill(1),
-                Constraint::Length(1),
-                Constraint::Fill(1),
-            ])
-            .areas(area);
+    fn render_timer_pane(&self, area: Rect, buf: &mut Buffer) {
+        let mut lines = vec![Line::styled("Timer Calibration", Style::default().bold())];
+        lines.push(Line::raw(""));
 
-        let paragraph = Paragraph::new(Line::styled(
-            "Hello from Ratatui!",
+        // TSC frequency from CPUID
+        let tsc_freq_str = match cpuid::tsc_frequency() {
+            Some(freq) => format!("{} Hz ({:.2} GHz)", freq, freq as f64 / 1_000_000_000.0),
+            None => "Not available".into(),
+        };
+        lines.push(Line::raw(format!("TSC Frequency:   {}", tsc_freq_str)));
+
+        // Calibrated LAPIC timer frequency
+        let lapic_freq_str = match lapic_timer_freq_hz() {
+            Some(freq) => format!("{} Hz ({:.2} MHz)", freq, freq as f64 / 1_000_000.0),
+            None => "Not calibrated".into(),
+        };
+        lines.push(Line::raw(format!("LAPIC Timer Freq: {}", lapic_freq_str)));
+
+        lines.push(Line::raw(format!("Target Timer Hz:  {}", TARGET_TIMER_HZ)));
+        lines.push(Line::raw(format!("Current Ticks:    {}", interrupts::tick_count())));
+        lines.push(Line::raw(""));
+
+        // Color cycling test element
+        lines.push(Line::styled(
+            "● Color cycles every 2 seconds",
             Style::default().fg(self.color()),
-        ))
-        .centered();
+        ));
 
-        paragraph.render(message_slot, buf);
+        let paragraph = Paragraph::new(lines);
+        paragraph.render(area, buf);
     }
 
     fn render_fpu_pane(&mut self, area: Rect, buf: &mut Buffer) {
@@ -499,10 +512,10 @@ impl Widget for &mut App {
             Pane::Fpu => self.render_fpu_pane(block_inner, buf),
             Pane::Xsave => self.render_xsave_pane(block_inner, buf),
             Pane::Cpuid => self.render_cpuid_pane(block_inner, buf),
-            Pane::Dummy => self.render_dummy_pane(block_inner, buf),
+            Pane::Timer => self.render_timer_pane(block_inner, buf),
         }
 
-        let caption = "CPUID (c) | FPU (f) | XSAVE (x) | Dummy (d) | Quit (q)";
+        let caption = "CPUID (c) | FPU (f) | XSAVE (x) | Timer (t) | Quit (q)";
         caption.render(bottom_bar, buf);
     }
 }
