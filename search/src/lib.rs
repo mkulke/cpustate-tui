@@ -48,14 +48,45 @@ impl SearchState {
     }
 }
 
+/// Check if query contains any uppercase characters (for smart-case)
+pub fn has_uppercase(s: &str) -> bool {
+    s.chars().any(|c| c.is_uppercase())
+}
+
+/// Smart-case string matching: case-insensitive if query is all lowercase,
+/// case-sensitive if query contains any uppercase characters
+pub fn smart_contains(haystack: &str, needle: &str) -> bool {
+    if has_uppercase(needle) {
+        // Case-sensitive search
+        haystack.contains(needle)
+    } else {
+        // Case-insensitive search
+        haystack.to_lowercase().contains(&needle.to_lowercase())
+    }
+}
+
 /// Search through feature names and return matching line offsets
 pub fn find_matches(query: &str, features: &[(&str, bool)], start_line: u16) -> Vec<u16> {
-    let query_lower = query.to_lowercase();
     let mut matches = Vec::new();
     let mut line = start_line;
 
     for (name, _) in features {
-        if name.to_lowercase().contains(&query_lower) {
+        if smart_contains(name, query) {
+            matches.push(line);
+        }
+        line += 1;
+    }
+
+    matches
+}
+
+/// Search through string names and return matching line offsets
+pub fn find_matches_strs(query: &str, names: &[&str], start_line: u16) -> Vec<u16> {
+    let mut matches = Vec::new();
+    let mut line = start_line;
+
+    for name in names {
+        if smart_contains(name, query) {
             matches.push(line);
         }
         line += 1;
@@ -159,5 +190,39 @@ mod tests {
         assert!(state.matches.is_empty());
         assert_eq!(state.current_match, 0);
         assert!(state.last_query.is_empty());
+    }
+
+    #[test]
+    fn test_smart_contains_lowercase_query() {
+        // Lowercase query matches both cases
+        assert!(smart_contains("IA32_EFER", "efer"));
+        assert!(smart_contains("ia32_efer", "efer"));
+        assert!(smart_contains("EFER", "ef"));
+    }
+
+    #[test]
+    fn test_smart_contains_uppercase_query() {
+        // Uppercase in query triggers case-sensitive
+        assert!(smart_contains("IA32_EFER", "EFER"));
+        assert!(!smart_contains("ia32_efer", "EFER")); // No match - case sensitive
+        assert!(smart_contains("IA32_EFER", "IA32"));
+        assert!(!smart_contains("ia32_efer", "IA32")); // No match
+    }
+
+    #[test]
+    fn test_smart_contains_mixed_query() {
+        // Mixed case query is case-sensitive
+        assert!(smart_contains("IA32_TSC_AUX", "TSC_A"));
+        assert!(!smart_contains("ia32_tsc_aux", "TSC_A"));
+    }
+
+    #[test]
+    fn test_has_uppercase() {
+        assert!(!has_uppercase("abc"));
+        assert!(!has_uppercase("123"));
+        assert!(!has_uppercase("abc_123"));
+        assert!(has_uppercase("Abc"));
+        assert!(has_uppercase("ABC"));
+        assert!(has_uppercase("abC"));
     }
 }

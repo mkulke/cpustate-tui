@@ -17,6 +17,7 @@ mod ioapic;
 mod irq_mutex;
 mod lapic;
 mod memory;
+mod msr;
 mod qemu;
 mod ratatui_backend;
 mod serial;

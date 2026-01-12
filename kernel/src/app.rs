@@ -13,6 +13,7 @@ use crate::fpu::{
 };
 use crate::interrupts;
 use crate::lapic::{lapic_timer_freq_hz, TARGET_TIMER_HZ};
+use crate::msr::{self, MsrCategory};
 use crate::qemu::{self, QemuExitCode};
 use crate::ratatui_backend::SerialAnsiBackend;
 use crate::serial::{self, SerialPort};
@@ -104,6 +105,7 @@ pub enum Pane {
     Fpu,
     Xsave,
     Timer,
+    Msr,
 }
 
 #[derive(Default, PartialEq)]
@@ -125,6 +127,7 @@ struct PaneScrollHints {
 struct ScrollHints {
     cpuid: PaneScrollHints,
     fpu: PaneScrollHints,
+    msr: PaneScrollHints,
 }
 
 /// Minimum characters before search activates
@@ -146,6 +149,7 @@ pub struct App {
     hue: u16,
     pane: Pane,
     cpuid_state: CpuidState,
+    msr_state: Vec<MsrCategory>,
     scroll_hints: ScrollHints,
     last_g_tick: Option<usize>,
     mode: Mode,
@@ -206,10 +210,13 @@ impl App {
             enable_avx();
         }
 
+        let msr_state = msr::read_all_msrs();
+
         Self {
             hue: 0,
             pane: Pane::Cpuid,
             cpuid_state,
+            msr_state,
             scroll_hints: ScrollHints::default(),
             last_g_tick: None,
             mode: Mode::default(),
@@ -257,6 +264,11 @@ impl App {
                 self.scroll_hints.fpu.max_offset,
                 self.scroll_hints.fpu.page_height,
             ),
+            Pane::Msr => (
+                &mut self.scroll_hints.msr.y_offset,
+                self.scroll_hints.msr.max_offset,
+                self.scroll_hints.msr.page_height,
+            ),
             _ => return,
         };
 
@@ -290,6 +302,7 @@ impl App {
             Pane::Fpu => "FPU",
             Pane::Xsave => "XSAVE",
             Pane::Timer => "Timer",
+            Pane::Msr => "MSR",
         }
     }
 
@@ -332,11 +345,14 @@ impl App {
                 // Navigation mode input handling
                 event = match byte {
                     b'q' => Some(InputEvent::Quit),
-                    b'/' if self.pane == Pane::Cpuid => Some(InputEvent::EnterSearchMode),
+                    b'/' if self.pane == Pane::Cpuid || self.pane == Pane::Msr => {
+                        Some(InputEvent::EnterSearchMode)
+                    }
                     b'c' => Some(InputEvent::SelectPane(Pane::Cpuid)),
                     b'f' => Some(InputEvent::SelectPane(Pane::Fpu)),
                     b'x' => Some(InputEvent::SelectPane(Pane::Xsave)),
                     b't' => Some(InputEvent::SelectPane(Pane::Timer)),
+                    b'm' => Some(InputEvent::SelectPane(Pane::Msr)),
                     b'j' => Some(InputEvent::ScrollDown),
                     b'k' => Some(InputEvent::ScrollUp),
                     b'G' => Some(InputEvent::ScrollToBottom),
@@ -376,7 +392,7 @@ impl App {
 
     /// Perform search on CPUID features, updating matches and scrolling to first match
     fn perform_search(&mut self) {
-        let query = self.search_buffer.to_lowercase();
+        let query = self.search_buffer.clone();
 
         // Check minimum length
         if query.len() < MIN_SEARCH_LEN {
@@ -393,6 +409,14 @@ impl App {
         self.search_state.inner.matches.clear();
         self.search_state.inner.current_match = 0;
 
+        match self.pane {
+            Pane::Cpuid => self.perform_cpuid_search(&query),
+            Pane::Msr => self.perform_msr_search(&query),
+            _ => {}
+        }
+    }
+
+    fn perform_cpuid_search(&mut self, query: &str) {
         // Build search index: line numbers where features match
         // Line structure in CPUID pane:
         // 0: vendor header, 1: amd, 2: intel, 3: empty
@@ -401,7 +425,7 @@ impl App {
 
         // Features
         self.search_state.inner.matches.extend(search::find_matches(
-            &query,
+            query,
             self.cpuid_state.features(),
             line,
         ));
@@ -410,7 +434,7 @@ impl App {
         // Empty line + extended features header
         line += 2;
         self.search_state.inner.matches.extend(search::find_matches(
-            &query,
+            query,
             self.cpuid_state.extended_features(),
             line,
         ));
@@ -419,7 +443,7 @@ impl App {
         // Empty line + extended state features header
         line += 2;
         self.search_state.inner.matches.extend(search::find_matches(
-            &query,
+            query,
             self.cpuid_state.extended_state_features().supports(),
             line,
         ));
@@ -430,16 +454,60 @@ impl App {
         }
     }
 
+    fn perform_msr_search(&mut self, query: &str) {
+        // Build search index for MSR pane
+        // Each category has: header line, N entry lines, empty line
+        let mut line: u16 = 0;
+
+        for category in &self.msr_state {
+            // Skip header line
+            line += 1;
+
+            // Collect entry names for this category
+            let names: Vec<&str> = category.entries.iter().map(|e| e.name).collect();
+            self.search_state
+                .inner
+                .matches
+                .extend(search::find_matches_strs(query, &names, line));
+
+            line += category.entries.len() as u16;
+            // Empty line
+            line += 1;
+        }
+
+        // Jump to first match if any
+        if let Some(&first) = self.search_state.inner.matches.first() {
+            self.scroll_hints.msr.y_offset = first;
+        }
+    }
+
     fn next_match(&mut self) {
-        if let Some(offset) = self.search_state.inner.next() {
-            // Clamp to max_offset to avoid scrolling past content
-            self.scroll_hints.cpuid.y_offset = offset.min(self.scroll_hints.cpuid.max_offset);
+        let Some(offset) = self.search_state.inner.next() else {
+            return;
+        };
+        match self.pane {
+            Pane::Cpuid => {
+                self.scroll_hints.cpuid.y_offset = offset.min(self.scroll_hints.cpuid.max_offset);
+            }
+            Pane::Msr => {
+                self.scroll_hints.msr.y_offset = offset.min(self.scroll_hints.msr.max_offset);
+            }
+            _ => {}
         }
     }
 
     fn prev_match(&mut self) {
-        if let Some(offset) = self.search_state.inner.prev() {
-            self.scroll_hints.cpuid.y_offset = offset.min(self.scroll_hints.cpuid.max_offset);
+        let Some(offset) = self.search_state.inner.prev() else {
+            return;
+        };
+        match self.pane {
+            Pane::Cpuid => {
+                self.scroll_hints.cpuid.y_offset = offset.min(self.scroll_hints.cpuid.max_offset);
+            }
+            Pane::Msr => {
+                self.scroll_hints.msr.y_offset = offset.min(self.scroll_hints.msr.max_offset);
+            }
+            _ => {}
         }
     }
 
@@ -624,6 +692,79 @@ impl App {
         paragraph.render(area, buf);
     }
 
+    fn render_msr_pane(&mut self, area: Rect, buf: &mut Buffer) {
+        let mut lines: Vec<Line> = Vec::new();
+        let num_categories = self.msr_state.len();
+
+        for (i, category) in self.msr_state.iter().enumerate() {
+            // Category header
+            lines.push(Line::styled(category.name, Style::default().bold()));
+
+            for entry in &category.entries {
+                let value_str = match entry.value {
+                    Some(v) => format!("0x{:016x}", v),
+                    None => "N/A".to_string(),
+                };
+                lines.push(self.highlight_msr_line(entry.name, entry.address, &value_str));
+            }
+
+            // Empty line between categories (but not after the last one)
+            if i < num_categories - 1 {
+                lines.push(Line::raw(""));
+            }
+        }
+
+        let n_lines = lines.len();
+        let paragraph = Paragraph::new(lines).scroll((self.scroll_hints.msr.y_offset, 0));
+
+        paragraph.render(area, buf);
+
+        self.scroll_hints.msr.max_offset = (n_lines as u16).saturating_sub(area.height);
+        self.scroll_hints.msr.page_height = area.height.saturating_sub(2);
+    }
+
+    /// Create a Line for MSR entry with search term highlighted
+    fn highlight_msr_line(&self, name: &str, address: u32, value: &str) -> Line<'_> {
+        let suffix = format!(" (0x{:08X}) = {}", address, value);
+
+        // Only highlight in Search or SearchResults mode
+        if self.mode != Mode::Search && self.mode != Mode::SearchResults {
+            return Line::raw(format!("{:<24}{}", name, suffix));
+        }
+
+        let query = &self.search_buffer;
+
+        if query.len() >= MIN_SEARCH_LEN && search::smart_contains(name, query) {
+            let pos = if search::has_uppercase(query) {
+                name.find(query.as_str())
+            } else {
+                name.to_lowercase().find(&query.to_lowercase())
+            };
+
+            if let Some(pos) = pos {
+                let before = &name[..pos];
+                let matched = &name[pos..pos + query.len()];
+                let after = &name[pos + query.len()..];
+
+                // Pad name to 24 chars
+                let padding = 24usize.saturating_sub(name.len());
+                let padded_after = format!("{}{}", after, " ".repeat(padding));
+
+                return Line::from(vec![
+                    Span::raw(before.to_string()),
+                    Span::styled(
+                        matched.to_string(),
+                        Style::default().fg(Color::Black).bg(Color::Yellow),
+                    ),
+                    Span::raw(padded_after),
+                    Span::raw(suffix),
+                ]);
+            }
+        }
+
+        Line::raw(format!("{:<24}{}", name, suffix))
+    }
+
     /// Create a Line with search term highlighted (only in Search/SearchResults mode)
     fn highlight_line(&self, name: &str, value: &str, width: usize) -> Line<'_> {
         // Only highlight in Search or SearchResults mode
@@ -631,23 +772,31 @@ impl App {
             return Line::raw(format!("{:<width$} = {}", name, value, width = width));
         }
 
-        let query = self.search_buffer.to_lowercase();
-        let name_lower = name.to_lowercase();
+        let query = &self.search_buffer;
 
-        if query.len() >= MIN_SEARCH_LEN && name_lower.contains(query.as_str()) {
-            // Find match position
-            if let Some(pos) = name_lower.find(query.as_str()) {
+        if query.len() >= MIN_SEARCH_LEN && search::smart_contains(name, query) {
+            // Find match position (need to handle smart-case)
+            let pos = if search::has_uppercase(query) {
+                name.find(query.as_str())
+            } else {
+                name.to_lowercase().find(&query.to_lowercase())
+            };
+
+            if let Some(pos) = pos {
                 let before = &name[..pos];
                 let matched = &name[pos..pos + query.len()];
                 let after = &name[pos + query.len()..];
-                
+
                 // Pad to width
                 let padding = width.saturating_sub(name.len());
                 let padded_after = format!("{}{}", after, " ".repeat(padding));
-                
+
                 return Line::from(vec![
                     Span::raw(before.to_string()),
-                    Span::styled(matched.to_string(), Style::default().fg(Color::Black).bg(Color::Yellow)),
+                    Span::styled(
+                        matched.to_string(),
+                        Style::default().fg(Color::Black).bg(Color::Yellow),
+                    ),
                     Span::raw(padded_after),
                     Span::raw(format!(" = {}", value)),
                 ]);
@@ -733,6 +882,7 @@ impl Widget for &mut App {
             Pane::Xsave => self.render_xsave_pane(block_inner, buf),
             Pane::Cpuid => self.render_cpuid_pane(block_inner, buf),
             Pane::Timer => self.render_timer_pane(block_inner, buf),
+            Pane::Msr => self.render_msr_pane(block_inner, buf),
         }
 
         if self.mode == Mode::Search {
@@ -753,7 +903,7 @@ impl Widget for &mut App {
             ]);
             search_line.render(bottom_bar, buf);
         } else {
-            let caption = "CPUID (c) | FPU (f) | XSAVE (x) | Timer (t) | Quit (q)";
+            let caption = "CPUID (c) | FPU (f) | XSAVE (x) | Timer (t) | MSR (m) | Quit (q)";
             caption.render(bottom_bar, buf);
         }
     }
