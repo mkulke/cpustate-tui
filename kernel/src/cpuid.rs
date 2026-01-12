@@ -21,6 +21,7 @@ pub struct CpuFeatures {
     features: Vec<(&'static str, bool)>,
     extended_features: Vec<(&'static str, bool)>,
     extended_state_features: ExtendedStateFeatures,
+    cpuid: CpuId<CpuIdReaderNative>,
 }
 
 impl CpuFeatures {
@@ -31,6 +32,7 @@ impl CpuFeatures {
         let extended_state_features = build_extended_state_features(&cpuid);
         let vendor_info = build_vendor_info(&cpuid);
         CpuFeatures {
+            cpuid,
             vendor_info,
             features,
             extended_features,
@@ -60,6 +62,11 @@ impl CpuFeatures {
         fi.has_xsave()
     }
 
+    pub fn has_avx2(&self) -> bool {
+        let efi = self.cpuid.get_extended_feature_info().unwrap();
+        efi.has_avx2()
+    }
+
     pub fn leaf(&self, leaf: u32, subleaf: u32) -> [u32; 4] {
         // Directly query leaf 0xD subleaf 0
         unsafe {
@@ -67,6 +74,13 @@ impl CpuFeatures {
             [result.eax, result.ebx, result.ecx, result.edx]
         }
     }
+}
+
+/// Returns TSC frequency in Hz from CPUID leaf 0x15, if available.
+pub fn tsc_frequency() -> Option<u64> {
+    let cpuid = CpuId::new();
+    let tsc_info = cpuid.get_tsc_info()?;
+    tsc_info.tsc_frequency()
 }
 
 pub struct VendorInfo {

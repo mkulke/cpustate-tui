@@ -1,5 +1,5 @@
 use crate::ioapic::{self, COM1_VECTOR};
-use crate::lapic::{Lapic, ERROR_VECTOR, SPURIOUS_VECTOR, TIMER_VECTOR};
+use crate::lapic::{Lapic, ERROR_VECTOR, SPURIOUS_VECTOR, TARGET_TIMER_HZ, TIMER_VECTOR};
 use crate::memory;
 use crate::serial;
 use core::sync::atomic::{AtomicUsize, Ordering};
@@ -11,7 +11,8 @@ static IDT: Once<InterruptDescriptorTable> = Once::new();
 static TICK_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static PRINT_EVENTS: AtomicUsize = AtomicUsize::new(0);
 
-const TICKS_PER_3_SECONDS: usize = 55;
+/// Ticks per color change (3 seconds at TARGET_TIMER_HZ)
+const TICKS_PER_EVENT: usize = (TARGET_TIMER_HZ * 3) as usize;
 
 fn lapic() -> Lapic {
     Lapic::new()
@@ -20,7 +21,7 @@ fn lapic() -> Lapic {
 extern "x86-interrupt" fn timer_interrupt_handler(_sf: InterruptStackFrame) {
     let ticks = TICK_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
 
-    if ticks % TICKS_PER_3_SECONDS == 0 {
+    if ticks % TICKS_PER_EVENT == 0 {
         PRINT_EVENTS.fetch_add(1, Ordering::Relaxed);
     }
 
