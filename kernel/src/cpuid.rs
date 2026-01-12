@@ -76,11 +76,26 @@ impl CpuFeatures {
     }
 }
 
-/// Returns TSC frequency in Hz from CPUID leaf 0x15, if available.
+/// Returns TSC frequency in Hz from CPUID leaf 0x15, or processor base
+/// frequency from leaf 0x16 as fallback.
 pub fn tsc_frequency() -> Option<u64> {
     let cpuid = CpuId::new();
-    let tsc_info = cpuid.get_tsc_info()?;
-    tsc_info.tsc_frequency()
+
+    // Try leaf 0x15 first (TSC/Crystal Clock info)
+    if let Some(tsc_info) = cpuid.get_tsc_info() {
+        if let Some(freq) = tsc_info.tsc_frequency() {
+            return Some(freq);
+        }
+    }
+
+    // Fall back to leaf 0x16 (Processor Frequency Info)
+    let freq_info = cpuid.get_processor_frequency_info()?;
+    let base_mhz = freq_info.processor_base_frequency();
+    if base_mhz > 0 {
+        return Some(base_mhz as u64 * 1_000_000);
+    }
+
+    None
 }
 
 pub struct VendorInfo {

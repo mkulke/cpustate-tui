@@ -6,7 +6,10 @@ use core::sync::atomic::Ordering;
 use x86_64::instructions;
 
 use crate::cpuid::{self, CpuFeatures, ExtendedStateFeatures, VendorInfo};
-use crate::fpu::{enable_avx, enable_sse, fxsave64, read_ymm_registers, set_xmm0_bytes, set_xmm15_bytes, FxSaveAligned, YmmRegisters};
+use crate::fpu::{
+    enable_avx, enable_sse, fxsave64, read_ymm_registers, set_xmm0_bytes, set_xmm15_bytes,
+    FxSaveAligned, YmmRegisters,
+};
 use crate::interrupts;
 use crate::lapic::{lapic_timer_freq_hz, TARGET_TIMER_HZ};
 use crate::qemu::{self, QemuExitCode};
@@ -16,7 +19,7 @@ use crate::serial::{self, SerialPort};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Style};
-use ratatui::text::{Line, Text};
+use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Paragraph, Widget};
 use ratatui::Terminal;
 
@@ -87,6 +90,10 @@ impl CpuidState {
 
     fn has_avx2(&self) -> bool {
         self.features.has_avx2()
+    }
+
+    fn leaf(&self, leaf: u32, subleaf: u32) -> [u32; 4] {
+        self.features.leaf(leaf, subleaf)
     }
 }
 
@@ -289,13 +296,13 @@ impl App {
     }
 
     fn handle_ticks(&mut self) -> bool {
-        let n = interrupts::PRINT_EVENTS.swap(0, Ordering::AcqRel);
-        let mut update = false;
-        for _ in 0..n {
+        let color_events = interrupts::PRINT_EVENTS.swap(0, Ordering::AcqRel);
+        for _ in 0..color_events {
             self.tick();
-            update = true;
         }
-        update
+
+        let second_events = interrupts::SECOND_EVENTS.swap(0, Ordering::AcqRel);
+        color_events > 0 || second_events > 0
     }
 
     fn draw(&mut self, terminal: &mut Terminal<SerialAnsiBackend<SerialPort>>) {
@@ -349,24 +356,44 @@ impl App {
             Some(freq) => format!("{} Hz ({:.2} GHz)", freq, freq as f64 / 1_000_000_000.0),
             None => "Not available".into(),
         };
-        lines.push(Line::raw(format!("TSC Frequency:   {}", tsc_freq_str)));
+        lines.push(Line::raw(format!("{:<18}{}", "TSC Frequency:", tsc_freq_str)));
 
         // Calibrated LAPIC timer frequency
         let lapic_freq_str = match lapic_timer_freq_hz() {
             Some(freq) => format!("{} Hz ({:.2} MHz)", freq, freq as f64 / 1_000_000.0),
             None => "Not calibrated".into(),
         };
-        lines.push(Line::raw(format!("LAPIC Timer Freq: {}", lapic_freq_str)));
+        lines.push(Line::raw(format!("{:<18}{}", "LAPIC Timer Freq:", lapic_freq_str)));
 
-        lines.push(Line::raw(format!("Target Timer Hz:  {}", TARGET_TIMER_HZ)));
-        lines.push(Line::raw(format!("Current Ticks:    {}", interrupts::tick_count())));
+        lines.push(Line::raw(format!("{:<18}{}", "Target Timer Hz:", TARGET_TIMER_HZ)));
+        lines.push(Line::raw(format!("{:<18}{}", "Current Ticks:", interrupts::tick_count())));
         lines.push(Line::raw(""));
 
-        // Color cycling test element
-        lines.push(Line::styled(
-            "● Color cycles every 2 seconds",
-            Style::default().fg(self.color()),
-        ));
+        // Raw CPUID leaf diagnostics
+        lines.push(Line::styled("CPUID Diagnostics", Style::default().bold()));
+        let [eax, ebx, ecx, _] = self.cpuid_state.leaf(0x15, 0);
+        lines.push(Line::raw(format!("Leaf 0x15: denom={} numer={} crystal_hz={}", eax, ebx, ecx)));
+        let [eax, ebx, ecx, _] = self.cpuid_state.leaf(0x16, 0);
+        lines.push(Line::raw(format!("Leaf 0x16: base={}MHz max={}MHz bus={}MHz", eax & 0xFFFF, ebx & 0xFFFF, ecx & 0xFFFF)));
+        lines.push(Line::raw(""));
+
+        // Misc section with uptime
+        lines.push(Line::styled("Misc", Style::default().bold()));
+        let total_seconds = interrupts::tick_count() as u64 / TARGET_TIMER_HZ;
+        let uptime_str = if total_seconds >= 120 * 60 {
+            // >= 120 minutes: show hours only
+            format!("{} hours", total_seconds / 3600)
+        } else if total_seconds >= 120 {
+            // >= 120 seconds: show minutes only
+            format!("{} minutes", total_seconds / 60)
+        } else if total_seconds >= 60 {
+            // 60-119 seconds: show "1 minute X seconds"
+            format!("1 minute {} seconds", total_seconds - 60)
+        } else {
+            format!("{} seconds", total_seconds)
+        };
+        let uptime_span = Span::styled(uptime_str, Style::default().fg(self.color()));
+        lines.push(Line::from(vec![Span::raw("Uptime: "), uptime_span]));
 
         let paragraph = Paragraph::new(lines);
         paragraph.render(area, buf);
@@ -398,7 +425,8 @@ impl App {
         }
 
         let n_lines = text.len();
-        let paragraph = Paragraph::new(Text::from(text)).scroll((self.scroll_hints.fpu.y_offset, 0));
+        let paragraph =
+            Paragraph::new(Text::from(text)).scroll((self.scroll_hints.fpu.y_offset, 0));
         paragraph.render(area, buf);
 
         self.scroll_hints.fpu.max_offset = (n_lines as u16).saturating_sub(area.height);

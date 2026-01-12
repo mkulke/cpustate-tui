@@ -10,9 +10,13 @@ use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame};
 static IDT: Once<InterruptDescriptorTable> = Once::new();
 static TICK_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static PRINT_EVENTS: AtomicUsize = AtomicUsize::new(0);
+pub static SECOND_EVENTS: AtomicUsize = AtomicUsize::new(0);
 
 /// Ticks per color change (2 seconds at TARGET_TIMER_HZ)
 const TICKS_PER_EVENT: usize = (TARGET_TIMER_HZ * 2) as usize;
+
+/// Ticks per second
+const TICKS_PER_SECOND: usize = TARGET_TIMER_HZ as usize;
 
 /// Returns the current tick count since boot
 pub fn tick_count() -> usize {
@@ -25,6 +29,10 @@ fn lapic() -> Lapic {
 
 extern "x86-interrupt" fn timer_interrupt_handler(_sf: InterruptStackFrame) {
     let ticks = TICK_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+
+    if ticks % TICKS_PER_SECOND == 0 {
+        SECOND_EVENTS.fetch_add(1, Ordering::Relaxed);
+    }
 
     if ticks % TICKS_PER_EVENT == 0 {
         PRINT_EVENTS.fetch_add(1, Ordering::Relaxed);
