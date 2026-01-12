@@ -8,6 +8,7 @@ use x86_64::instructions;
 use crate::cpuid::{CpuFeatures, ExtendedStateFeatures, VendorInfo};
 use crate::fpu::{enable_avx, enable_sse, fxsave64, read_ymm_registers, set_xmm0_bytes, set_xmm15_bytes, FxSaveAligned, YmmRegisters};
 use crate::interrupts;
+use crate::lapic::TARGET_TIMER_HZ;
 use crate::qemu::{self, QemuExitCode};
 use crate::ratatui_backend::SerialAnsiBackend;
 use crate::serial::{self, SerialPort};
@@ -113,6 +114,7 @@ pub struct App {
     pane: Pane,
     cpuid_state: CpuidState,
     scroll_hints: ScrollHints,
+    last_g_tick: Option<usize>,
 }
 
 fn write_xmm_values() {
@@ -128,6 +130,7 @@ fn write_xmm_values() {
 
 enum InputEvent {
     Quit,
+    ScrollToTop,
     ScrollToBottom,
     ScrollUp,
     ScrollDown,
@@ -137,8 +140,12 @@ enum InputEvent {
 enum ScrollDirection {
     Up,
     Down,
+    Top,
     Bottom,
 }
+
+/// Max ticks between two 'g' presses to trigger gg (500ms at TARGET_TIMER_HZ)
+const GG_TIMEOUT_TICKS: usize = (TARGET_TIMER_HZ / 2) as usize;
 
 impl App {
     pub fn new() -> Self {
@@ -157,6 +164,7 @@ impl App {
             pane: Pane::Cpuid,
             cpuid_state,
             scroll_hints: ScrollHints::default(),
+            last_g_tick: None,
         }
     }
 
@@ -200,6 +208,9 @@ impl App {
                     *y_offset = y_offset.saturating_add(1);
                 }
             }
+            ScrollDirection::Top => {
+                *y_offset = 0;
+            }
             ScrollDirection::Bottom => {
                 *y_offset = max_offset;
             }
@@ -228,22 +239,38 @@ impl App {
             let mut queue = queue.borrow_mut();
             let (_prod, mut cons) = queue.split();
 
-            if let Some(byte) = cons.dequeue() {
-                event = match byte {
-                    b'q' => Some(InputEvent::Quit),
-                    b'c' => Some(InputEvent::SelectPane(Pane::Cpuid)),
-                    b'f' => Some(InputEvent::SelectPane(Pane::Fpu)),
-                    b'x' => Some(InputEvent::SelectPane(Pane::Xsave)),
-                    b'd' => Some(InputEvent::SelectPane(Pane::Dummy)),
-                    b'j' => Some(InputEvent::ScrollDown),
-                    b'k' => Some(InputEvent::ScrollUp),
-                    b'G' => Some(InputEvent::ScrollToBottom),
-                    _ => None,
-                };
-            }
+            let Some(byte) = cons.dequeue() else {
+                return;
+            };
+
+            event = match byte {
+                b'q' => Some(InputEvent::Quit),
+                b'c' => Some(InputEvent::SelectPane(Pane::Cpuid)),
+                b'f' => Some(InputEvent::SelectPane(Pane::Fpu)),
+                b'x' => Some(InputEvent::SelectPane(Pane::Xsave)),
+                b'd' => Some(InputEvent::SelectPane(Pane::Dummy)),
+                b'j' => Some(InputEvent::ScrollDown),
+                b'k' => Some(InputEvent::ScrollUp),
+                b'G' => Some(InputEvent::ScrollToBottom),
+                b'g' => {
+                    let now = interrupts::tick_count();
+                    let Some(last) = self.last_g_tick else {
+                        self.last_g_tick = Some(now);
+                        return;
+                    };
+                    if now.saturating_sub(last) <= GG_TIMEOUT_TICKS {
+                        self.last_g_tick = None;
+                        Some(InputEvent::ScrollToTop)
+                    } else {
+                        self.last_g_tick = Some(now);
+                        None
+                    }
+                }
+                _ => None,
+            };
         });
 
-        return event;
+        event
     }
 
     fn handle_ticks(&mut self) -> bool {
@@ -280,6 +307,7 @@ impl App {
             if let Some(event) = event {
                 match event {
                     InputEvent::Quit => qemu::exit(QemuExitCode::Success),
+                    InputEvent::ScrollToTop => self.scroll(ScrollDirection::Top),
                     InputEvent::ScrollToBottom => self.scroll(ScrollDirection::Bottom),
                     InputEvent::SelectPane(pane) => self.pane = pane,
                     InputEvent::ScrollUp => self.scroll(ScrollDirection::Up),

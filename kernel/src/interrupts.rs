@@ -14,6 +14,11 @@ pub static PRINT_EVENTS: AtomicUsize = AtomicUsize::new(0);
 /// Ticks per color change (3 seconds at TARGET_TIMER_HZ)
 const TICKS_PER_EVENT: usize = (TARGET_TIMER_HZ * 3) as usize;
 
+/// Returns the current tick count since boot
+pub fn tick_count() -> usize {
+    TICK_COUNT.load(Ordering::Relaxed)
+}
+
 fn lapic() -> Lapic {
     Lapic::new()
 }
