@@ -30,11 +30,11 @@ fn lapic() -> Lapic {
 extern "x86-interrupt" fn timer_interrupt_handler(_sf: InterruptStackFrame) {
     let ticks = TICK_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
 
-    if ticks % TICKS_PER_SECOND == 0 {
+    if ticks.is_multiple_of(TICKS_PER_SECOND) {
         SECOND_EVENTS.fetch_add(1, Ordering::Relaxed);
     }
 
-    if ticks % TICKS_PER_EVENT == 0 {
+    if ticks.is_multiple_of(TICKS_PER_EVENT) {
         PRINT_EVENTS.fetch_add(1, Ordering::Relaxed);
     }
 

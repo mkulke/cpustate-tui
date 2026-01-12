@@ -11,6 +11,7 @@ use crate::fpu::{
     enable_avx, enable_sse, fxsave64, read_ymm_registers, set_xmm0_bytes, set_xmm15_bytes,
     FxSaveAligned, YmmRegisters,
 };
+use crate::input::{Input, InputEvent};
 use crate::interrupts;
 use crate::lapic::{lapic_timer_freq_hz, TARGET_TIMER_HZ};
 #[cfg(feature = "msr")]
@@ -104,7 +105,7 @@ impl CpuidState {
     }
 }
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Clone, Copy)]
 pub enum Pane {
     Cpuid,
     Fpu,
@@ -114,8 +115,8 @@ pub enum Pane {
     Msr,
 }
 
-#[derive(Default, PartialEq)]
-enum Mode {
+#[derive(Default, PartialEq, Clone, Copy)]
+pub enum Mode {
     #[default]
     Navigation,
     Search,
@@ -140,16 +141,9 @@ struct ScrollHints {
 /// Minimum characters before search activates
 const MIN_SEARCH_LEN: usize = 2;
 
+#[derive(Default)]
 struct SearchState {
     inner: search::SearchState,
-}
-
-impl Default for SearchState {
-    fn default() -> Self {
-        Self {
-            inner: search::SearchState::default(),
-        }
-    }
 }
 
 pub struct App {
@@ -159,10 +153,10 @@ pub struct App {
     #[cfg(feature = "msr")]
     msr_state: Vec<MsrCategory>,
     scroll_hints: ScrollHints,
-    last_g_tick: Option<usize>,
     mode: Mode,
     search_buffer: String,
     search_state: SearchState,
+    tick_count: usize,
 }
 
 fn write_xmm_values() {
@@ -176,24 +170,6 @@ fn write_xmm_values() {
     set_xmm15_bytes(&xmm);
 }
 
-enum InputEvent {
-    Quit,
-    ScrollToTop,
-    ScrollToBottom,
-    ScrollUp,
-    ScrollDown,
-    PageUp,
-    PageDown,
-    SelectPane(Pane),
-    EnterSearchMode,
-    ConfirmSearch,
-    ExitSearchMode,
-    SearchInput(u8),
-    SearchBackspace,
-    NextMatch,
-    PrevMatch,
-}
-
 enum ScrollDirection {
     Up,
     Down,
@@ -202,9 +178,6 @@ enum ScrollDirection {
     PageUp,
     PageDown,
 }
-
-/// Max ticks between two 'g' presses to trigger gg (500ms at TARGET_TIMER_HZ)
-const GG_TIMEOUT_TICKS: usize = (TARGET_TIMER_HZ / 2) as usize;
 
 impl App {
     pub fn new() -> Self {
@@ -228,11 +201,23 @@ impl App {
             #[cfg(feature = "msr")]
             msr_state,
             scroll_hints: ScrollHints::default(),
-            last_g_tick: None,
             mode: Mode::default(),
             search_buffer: String::new(),
             search_state: SearchState::default(),
+            tick_count: 0,
         }
+    }
+
+    pub fn mode(&self) -> Mode {
+        self.mode
+    }
+
+    pub fn pane(&self) -> Pane {
+        self.pane
+    }
+
+    pub fn tick_count(&self) -> usize {
+        self.tick_count
     }
 
     fn tick(&mut self) {
@@ -247,12 +232,12 @@ impl App {
         let f = (h % 60) as u32 * 255 / 60; // fractional part scaled to 0-255
 
         let (r, g, b) = match sector {
-            0 => (255, f as u8, 0),           // Red -> Yellow
-            1 => (255 - f as u8, 255, 0),     // Yellow -> Green
-            2 => (0, 255, f as u8),           // Green -> Cyan
-            3 => (0, 255 - f as u8, 255),     // Cyan -> Blue
-            4 => (f as u8, 0, 255),           // Blue -> Magenta
-            _ => (255, 0, 255 - f as u8),     // Magenta -> Red
+            0 => (255, f as u8, 0),       // Red -> Yellow
+            1 => (255 - f as u8, 255, 0), // Yellow -> Green
+            2 => (0, 255, f as u8),       // Green -> Cyan
+            3 => (0, 255 - f as u8, 255), // Cyan -> Blue
+            4 => (f as u8, 0, 255),       // Blue -> Magenta
+            _ => (255, 0, 255 - f as u8), // Magenta -> Red
         };
         (r, g, b)
     }
@@ -324,7 +309,7 @@ impl App {
         area
     }
 
-    fn handle_input(&mut self) -> Option<InputEvent> {
+    fn handle_input(&mut self, input: &mut Input) -> Option<InputEvent> {
         let mut event = None;
 
         serial::RX_QUEUE.with(|queue| {
@@ -335,59 +320,7 @@ impl App {
                 return;
             };
 
-            if self.mode == Mode::Search {
-                // Search input mode - typing in search bar
-                event = match byte {
-                    0x1B => Some(InputEvent::ExitSearchMode), // ESC
-                    0x7F | 0x08 => Some(InputEvent::SearchBackspace), // Backspace/DEL
-                    0x0D => Some(InputEvent::ConfirmSearch), // Enter - confirm and go to results mode
-                    b if b >= 0x20 && b < 0x7F => Some(InputEvent::SearchInput(b)), // Printable ASCII
-                    _ => None,
-                };
-            } else if self.mode == Mode::SearchResults {
-                // Search results mode - n/N navigation, ESC/Enter to exit
-                event = match byte {
-                    0x1B | 0x0D => Some(InputEvent::ExitSearchMode), // ESC or Enter exits to Navigation
-                    b'n' => Some(InputEvent::NextMatch),
-                    b'N' => Some(InputEvent::PrevMatch),
-                    b'/' => Some(InputEvent::EnterSearchMode), // Start new search
-                    _ => None,
-                };
-            } else {
-                // Navigation mode input handling
-                event = match byte {
-                    b'q' => Some(InputEvent::Quit),
-                    b'/' if self.pane == Pane::Cpuid => Some(InputEvent::EnterSearchMode),
-                    #[cfg(feature = "msr")]
-                    b'/' if self.pane == Pane::Msr => Some(InputEvent::EnterSearchMode),
-                    b'c' => Some(InputEvent::SelectPane(Pane::Cpuid)),
-                    b'f' => Some(InputEvent::SelectPane(Pane::Fpu)),
-                    b'x' => Some(InputEvent::SelectPane(Pane::Xsave)),
-                    b't' => Some(InputEvent::SelectPane(Pane::Timer)),
-                    #[cfg(feature = "msr")]
-                    b'm' => Some(InputEvent::SelectPane(Pane::Msr)),
-                    b'j' => Some(InputEvent::ScrollDown),
-                    b'k' => Some(InputEvent::ScrollUp),
-                    b'G' => Some(InputEvent::ScrollToBottom),
-                    0x06 => Some(InputEvent::PageDown), // Ctrl+F
-                    0x02 => Some(InputEvent::PageUp),   // Ctrl+B
-                    b'g' => {
-                        let now = interrupts::tick_count();
-                        let Some(last) = self.last_g_tick else {
-                            self.last_g_tick = Some(now);
-                            return;
-                        };
-                        if now.saturating_sub(last) <= GG_TIMEOUT_TICKS {
-                            self.last_g_tick = None;
-                            Some(InputEvent::ScrollToTop)
-                        } else {
-                            self.last_g_tick = Some(now);
-                            None
-                        }
-                    }
-                    _ => None,
-                };
-            }
+            event = input.handle_byte(self, byte);
         });
 
         event
@@ -497,7 +430,7 @@ impl App {
     }
 
     fn next_match(&mut self) {
-        let Some(offset) = self.search_state.inner.next() else {
+        let Some(offset) = self.search_state.inner.next_match() else {
             return;
         };
         match self.pane {
@@ -513,7 +446,7 @@ impl App {
     }
 
     fn prev_match(&mut self) {
-        let Some(offset) = self.search_state.inner.prev() else {
+        let Some(offset) = self.search_state.inner.prev_match() else {
             return;
         };
         match self.pane {
@@ -543,12 +476,16 @@ impl App {
         // initial draw
         self.draw(&mut terminal);
 
+        let mut input = Input::new();
+
         loop {
             instructions::hlt();
 
+            self.tick_count = interrupts::tick_count();
+
             let mut needs_redraw = self.handle_ticks();
 
-            let event = self.handle_input();
+            let event = self.handle_input(&mut input);
             if let Some(event) = event {
                 match event {
                     InputEvent::Quit => qemu::exit(QemuExitCode::Success),
@@ -564,12 +501,8 @@ impl App {
                         self.search_buffer.clear();
                         self.search_state.inner.clear();
                     }
-                    InputEvent::ConfirmSearch => {
-                        self.mode = Mode::SearchResults;
-                    }
-                    InputEvent::ExitSearchMode => {
-                        self.mode = Mode::Navigation;
-                    }
+                    InputEvent::ConfirmSearch => self.mode = Mode::SearchResults,
+                    InputEvent::ExitSearchMode => self.mode = Mode::Navigation,
                     InputEvent::SearchInput(b) => {
                         // Limit search buffer length (leave room for "/" prefix)
                         if self.search_buffer.len() < 76 {
@@ -603,30 +536,50 @@ impl App {
             Some(freq) => format!("{} Hz ({:.2} GHz)", freq, freq as f64 / 1_000_000_000.0),
             None => "Not available".into(),
         };
-        lines.push(Line::raw(format!("{:<18}{}", "TSC Frequency:", tsc_freq_str)));
+        lines.push(Line::raw(format!(
+            "{:<18}{}",
+            "TSC Frequency:", tsc_freq_str
+        )));
 
         // Calibrated LAPIC timer frequency
         let lapic_freq_str = match lapic_timer_freq_hz() {
             Some(freq) => format!("{} Hz ({:.2} MHz)", freq, freq as f64 / 1_000_000.0),
             None => "Not calibrated".into(),
         };
-        lines.push(Line::raw(format!("{:<18}{}", "LAPIC Timer Freq:", lapic_freq_str)));
+        lines.push(Line::raw(format!(
+            "{:<18}{}",
+            "LAPIC Timer Freq:", lapic_freq_str
+        )));
 
-        lines.push(Line::raw(format!("{:<18}{}", "Target Timer Hz:", TARGET_TIMER_HZ)));
-        lines.push(Line::raw(format!("{:<18}{}", "Current Ticks:", interrupts::tick_count())));
+        lines.push(Line::raw(format!(
+            "{:<18}{}",
+            "Target Timer Hz:", TARGET_TIMER_HZ
+        )));
+        lines.push(Line::raw(format!(
+            "{:<18}{}",
+            "Current Ticks:", self.tick_count
+        )));
         lines.push(Line::raw(""));
 
         // Raw CPUID leaf diagnostics
         lines.push(Line::styled("CPUID Diagnostics", Style::default().bold()));
         let [eax, ebx, ecx, _] = self.cpuid_state.leaf(0x15, 0);
-        lines.push(Line::raw(format!("Leaf 0x15: denom={} numer={} crystal_hz={}", eax, ebx, ecx)));
+        lines.push(Line::raw(format!(
+            "Leaf 0x15: denom={} numer={} crystal_hz={}",
+            eax, ebx, ecx
+        )));
         let [eax, ebx, ecx, _] = self.cpuid_state.leaf(0x16, 0);
-        lines.push(Line::raw(format!("Leaf 0x16: base={}MHz max={}MHz bus={}MHz", eax & 0xFFFF, ebx & 0xFFFF, ecx & 0xFFFF)));
+        lines.push(Line::raw(format!(
+            "Leaf 0x16: base={}MHz max={}MHz bus={}MHz",
+            eax & 0xFFFF,
+            ebx & 0xFFFF,
+            ecx & 0xFFFF
+        )));
         lines.push(Line::raw(""));
 
         // Misc section with uptime
         lines.push(Line::styled("Misc", Style::default().bold()));
-        let total_seconds = interrupts::tick_count() as u64 / TARGET_TIMER_HZ;
+        let total_seconds = self.tick_count as u64 / TARGET_TIMER_HZ;
         let uptime_str = if total_seconds >= 120 * 60 {
             // >= 120 minutes: show hours only
             format!("{} hours", total_seconds / 3600)
@@ -919,7 +872,10 @@ impl Widget for &mut App {
             let search_line = Line::from(vec![
                 Span::styled("/", Style::default().bold()),
                 Span::raw(self.search_buffer.as_str()),
-                Span::styled(format!(" [{}/{}]", current, match_count), Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    format!(" [{}/{}]", current, match_count),
+                    Style::default().fg(Color::DarkGray),
+                ),
             ]);
             search_line.render(bottom_bar, buf);
         } else {

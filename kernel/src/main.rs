@@ -12,6 +12,7 @@ use core::fmt::Write;
 mod app;
 mod cpuid;
 mod fpu;
+mod input;
 mod interrupts;
 mod ioapic;
 mod irq_mutex;

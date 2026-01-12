@@ -19,7 +19,7 @@ pub struct SearchState {
 
 impl SearchState {
     /// Move to next match, wrapping around. Returns new offset if matches exist.
-    pub fn next(&mut self) -> Option<u16> {
+    pub fn next_match(&mut self) -> Option<u16> {
         if self.matches.is_empty() {
             return None;
         }
@@ -28,7 +28,7 @@ impl SearchState {
     }
 
     /// Move to previous match, wrapping around. Returns new offset if matches exist.
-    pub fn prev(&mut self) -> Option<u16> {
+    pub fn prev_match(&mut self) -> Option<u16> {
         if self.matches.is_empty() {
             return None;
         }
@@ -145,11 +145,11 @@ mod tests {
             ..Default::default()
         };
 
-        assert_eq!(state.next(), Some(10)); // 0 -> 1
+        assert_eq!(state.next_match(), Some(10)); // 0 -> 1
         assert_eq!(state.current_match, 1);
-        assert_eq!(state.next(), Some(15)); // 1 -> 2
+        assert_eq!(state.next_match(), Some(15)); // 1 -> 2
         assert_eq!(state.current_match, 2);
-        assert_eq!(state.next(), Some(5)); // 2 -> 0 (wrap)
+        assert_eq!(state.next_match(), Some(5)); // 2 -> 0 (wrap)
         assert_eq!(state.current_match, 0);
     }
 
@@ -161,11 +161,11 @@ mod tests {
             ..Default::default()
         };
 
-        assert_eq!(state.prev(), Some(15)); // 0 -> 2 (wrap)
+        assert_eq!(state.prev_match(), Some(15)); // 0 -> 2 (wrap)
         assert_eq!(state.current_match, 2);
-        assert_eq!(state.prev(), Some(10)); // 2 -> 1
+        assert_eq!(state.prev_match(), Some(10)); // 2 -> 1
         assert_eq!(state.current_match, 1);
-        assert_eq!(state.prev(), Some(5)); // 1 -> 0
+        assert_eq!(state.prev_match(), Some(5)); // 1 -> 0
         assert_eq!(state.current_match, 0);
     }
 
@@ -173,8 +173,8 @@ mod tests {
     fn test_search_state_empty() {
         let mut state = SearchState::default();
 
-        assert_eq!(state.next(), None);
-        assert_eq!(state.prev(), None);
+        assert_eq!(state.next_match(), None);
+        assert_eq!(state.prev_match(), None);
     }
 
     #[test]

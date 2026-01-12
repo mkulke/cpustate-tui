@@ -119,11 +119,10 @@ pub fn tsc_frequency() -> Option<u64> {
     let cpuid = CpuId::new();
 
     // Try leaf 0x15 first (TSC/Crystal Clock info)
-    if let Some(tsc_info) = cpuid.get_tsc_info() {
-        if let Some(freq) = tsc_info.tsc_frequency() {
+    if let Some(tsc_info) = cpuid.get_tsc_info()
+        && let Some(freq) = tsc_info.tsc_frequency() {
             return Some(freq);
         }
-    }
 
     // Fall back to leaf 0x16 (Processor Frequency Info)
     let freq_info = cpuid.get_processor_frequency_info()?;
