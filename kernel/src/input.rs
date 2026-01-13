@@ -8,6 +8,8 @@ const SEQUENCE_TIMEOUT_TICKS: usize = (TARGET_TIMER_HZ / 2) as usize;
 enum Sequence {
     #[allow(non_camel_case_types)]
     gg,
+    #[allow(non_camel_case_types)]
+    dotdot,
 }
 
 pub enum InputEvent {
@@ -26,6 +28,7 @@ pub enum InputEvent {
     SearchBackspace,
     NextMatch,
     PrevMatch,
+    ClearScreen,
 }
 
 pub struct Input {
@@ -44,13 +47,13 @@ impl Input {
     fn handle_sequence(&mut self, seq: Sequence) -> bool {
         let now = interrupts::tick_count();
         // no sequence in progress
-        let Some(seq) = &mut self.in_sequence else {
+        let Some(in_progress) = &self.in_sequence else {
             self.in_sequence = Some(seq);
             self.in_sequence_since = now;
             return false;
         };
         // abort other sequence
-        if *seq != Sequence::gg {
+        if *in_progress != seq {
             self.in_sequence = None;
             return false;
         };
@@ -110,6 +113,10 @@ impl Input {
                     b'g' => {
                         let sequence_finalized = self.handle_sequence(Sequence::gg);
                         sequence_finalized.then_some(InputEvent::ScrollToTop)
+                    }
+                    b'.' => {
+                        let sequence_finalized = self.handle_sequence(Sequence::dotdot);
+                        sequence_finalized.then_some(InputEvent::ClearScreen)
                     }
                     _ => {
                         // Any other key aborts ongoing sequence

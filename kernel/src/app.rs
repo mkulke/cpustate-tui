@@ -324,6 +324,9 @@ impl App {
                     }
                     InputEvent::NextMatch => self.next_match(),
                     InputEvent::PrevMatch => self.prev_match(),
+                    InputEvent::ClearScreen => {
+                        terminal.clear().unwrap();
+                    }
                 }
                 needs_redraw = true;
             }
