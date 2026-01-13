@@ -1,6 +1,17 @@
+use alloc::format;
+use alloc::vec;
 use core::arch::asm;
+use core::fmt::LowerHex;
+
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
+use ratatui::style::Style;
+use ratatui::text::{Line, Text};
+use ratatui::widgets::{Paragraph, Widget};
 use x86_64::registers::control::{Cr0, Cr0Flags, Cr4, Cr4Flags};
 use x86_64::registers::xcontrol::{XCr0, XCr0Flags};
+
+use crate::scroll::ScrollHints;
 
 #[inline(always)]
 pub fn enable_sse() {
@@ -153,5 +164,83 @@ pub fn read_ymm_registers(out: &mut YmmRegisters) {
             ptr = in(reg) out as *mut YmmRegisters,
             options(nostack, preserves_flags),
         );
+    }
+}
+
+struct XmmBytes([u8; 16]);
+
+impl LowerHex for XmmBytes {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        for &b in self.0.iter().rev() {
+            write!(f, "{:02x}", b)?;
+        }
+        Ok(())
+    }
+}
+
+struct YmmBytes([u8; 32]);
+
+impl LowerHex for YmmBytes {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        for &b in self.0.iter().rev() {
+            write!(f, "{:02x}", b)?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Default)]
+pub struct FpuState {
+    pub scroll: ScrollHints,
+    pub has_avx2: bool,
+}
+
+impl FpuState {
+    pub fn new(has_avx2: bool) -> Self {
+        Self {
+            scroll: ScrollHints::default(),
+            has_avx2,
+        }
+    }
+
+    fn fxsave64(&self) -> FxSaveAligned {
+        let mut area = FxSaveAligned::new_zeroed();
+        fxsave64(&mut area);
+        area
+    }
+}
+
+impl Widget for &mut FpuState {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        let fp_area = self.fxsave64();
+
+        let header = Line::styled("fxsave64", Style::default().bold());
+        let line = Line::raw(format!("mcxsr=0x{:x}", fp_area.0.mxcsr));
+        let mut text = vec![header, line];
+        for i in 0..16 {
+            let value = XmmBytes(fp_area.0.xmm[i]);
+            let line = format!("xmm{:02}={:x}", i, value);
+            text.push(Line::raw(line));
+        }
+
+        // Display YMM registers if AVX2 is available
+        if self.has_avx2 {
+            text.push(Line::raw(""));
+            text.push(Line::styled("AVX2 YMM Registers", Style::default().bold()));
+            let mut ymm_regs = YmmRegisters::new_zeroed();
+            read_ymm_registers(&mut ymm_regs);
+            for i in 0..16 {
+                let value = YmmBytes(ymm_regs.ymm[i]);
+                let line = format!("ymm{:02}={:x}", i, value);
+                text.push(Line::raw(line));
+            }
+        }
+
+        let n_lines = text.len();
+        let paragraph = Paragraph::new(Text::from(text)).scroll((self.scroll.y_offset, 0));
+        paragraph.render(area, buf);
+
+        self.scroll.max_offset = (n_lines as u16).saturating_sub(area.height);
+        self.scroll.page_height = area.height.saturating_sub(2);
     }
 }

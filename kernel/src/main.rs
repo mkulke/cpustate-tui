@@ -22,6 +22,7 @@ mod memory;
 mod msr;
 mod qemu;
 mod ratatui_backend;
+mod scroll;
 mod serial;
 
 static BOOTLOADER_CONFIG: BootloaderConfig = {

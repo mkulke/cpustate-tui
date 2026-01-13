@@ -18,6 +18,7 @@ use crate::lapic::{lapic_timer_freq_hz, TARGET_TIMER_HZ};
 use crate::msr::{self, MsrCategory};
 use crate::qemu::{self, QemuExitCode};
 use crate::ratatui_backend::SerialAnsiBackend;
+use crate::scroll::ScrollHints;
 use crate::serial::{self, SerialPort};
 
 use ratatui::buffer::Buffer;
@@ -125,22 +126,10 @@ pub enum Mode {
 
 #[derive(Default)]
 struct PaneScrollHints {
-    max_offset: u16,
-    y_offset: u16,
-    page_height: u16,
-}
-
-#[derive(Default)]
-struct ScrollHints {
-    cpuid: PaneScrollHints,
+    cpuid: ScrollHints,
+    fpu: ScrollHints,
     #[cfg(feature = "msr")]
-    msr: PaneScrollHints,
-}
-
-#[derive(Default)]
-struct FpuState {
-    scroll: PaneScrollHints,
-    has_avx2: bool,
+    msr: ScrollHints,
 }
 
 /// Minimum characters before search activates
@@ -155,10 +144,9 @@ pub struct App {
     hue: u16,
     pane: Pane,
     cpuid_state: CpuidState,
-    fpu_state: FpuState,
     #[cfg(feature = "msr")]
     msr_state: Vec<MsrCategory>,
-    scroll_hints: ScrollHints,
+    scroll_hints: PaneScrollHints,
     mode: Mode,
     search_buffer: String,
     search_state: SearchState,
@@ -192,10 +180,8 @@ impl App {
 
         let cpuid_state = CpuidState::new();
 
-        let has_avx2 = cpuid_state.has_avx2();
-
         // Enable AVX if the CPU supports AVX2
-        if has_avx2 {
+        if cpuid_state.has_avx2() {
             enable_avx();
         }
 
@@ -206,13 +192,9 @@ impl App {
             hue: 0,
             pane: Pane::Cpuid,
             cpuid_state,
-            fpu_state: FpuState {
-                scroll: PaneScrollHints::default(),
-                has_avx2,
-            },
             #[cfg(feature = "msr")]
             msr_state,
-            scroll_hints: ScrollHints::default(),
+            scroll_hints: PaneScrollHints::default(),
             mode: Mode::default(),
             search_buffer: String::new(),
             search_state: SearchState::default(),
@@ -267,9 +249,9 @@ impl App {
                 self.scroll_hints.cpuid.page_height,
             ),
             Pane::Fpu => (
-                &mut self.fpu_state.scroll.y_offset,
-                self.fpu_state.scroll.max_offset,
-                self.fpu_state.scroll.page_height,
+                &mut self.scroll_hints.fpu.y_offset,
+                self.scroll_hints.fpu.max_offset,
+                self.scroll_hints.fpu.page_height,
             ),
             #[cfg(feature = "msr")]
             Pane::Msr => (
@@ -624,7 +606,7 @@ impl App {
         }
 
         // Display YMM registers if AVX2 is available
-        if self.fpu_state.has_avx2 {
+        if self.cpuid_state.has_avx2() {
             text.push(Line::raw(""));
             text.push(Line::styled("AVX2 YMM Registers", Style::default().bold()));
             let mut ymm_regs = YmmRegisters::new_zeroed();
@@ -638,11 +620,11 @@ impl App {
 
         let n_lines = text.len();
         let paragraph =
-            Paragraph::new(Text::from(text)).scroll((self.fpu_state.scroll.y_offset, 0));
+            Paragraph::new(Text::from(text)).scroll((self.scroll_hints.fpu.y_offset, 0));
         paragraph.render(area, buf);
 
-        self.fpu_state.scroll.max_offset = (n_lines as u16).saturating_sub(area.height);
-        self.fpu_state.scroll.page_height = area.height.saturating_sub(2);
+        self.scroll_hints.fpu.max_offset = (n_lines as u16).saturating_sub(area.height);
+        self.scroll_hints.fpu.page_height = area.height.saturating_sub(2);
     }
 
     fn render_xsave_pane(&self, area: Rect, buf: &mut Buffer) {
@@ -688,8 +670,7 @@ impl App {
                     Some(v) => format!("0x{:016x}", v),
                     None => "N/A".to_string(),
                 };
-                let suffix = format!(" (0x{:08X}) = {}", entry.address, value_str);
-                lines.push(self.highlight_line(entry.name, &suffix, 24));
+                lines.push(self.highlight_msr_line(entry.name, entry.address, &value_str));
             }
 
             // Empty line between categories (but not after the last one)
@@ -707,11 +688,54 @@ impl App {
         self.scroll_hints.msr.page_height = area.height.saturating_sub(2);
     }
 
-    /// Create a Line with search term highlighted (only in Search/SearchResults mode)
-    fn highlight_line(&self, name: &str, suffix: &str, width: usize) -> Line<'_> {
+    /// Create a Line for MSR entry with search term highlighted
+    #[cfg(feature = "msr")]
+    fn highlight_msr_line(&self, name: &str, address: u32, value: &str) -> Line<'_> {
+        let suffix = format!(" (0x{:08X}) = {}", address, value);
+
         // Only highlight in Search or SearchResults mode
         if self.mode != Mode::Search && self.mode != Mode::SearchResults {
-            return Line::raw(format!("{:<width$}{}", name, suffix, width = width));
+            return Line::raw(format!("{:<24}{}", name, suffix));
+        }
+
+        let query = &self.search_buffer;
+
+        if query.len() >= MIN_SEARCH_LEN && search::smart_contains(name, query) {
+            let pos = if search::has_uppercase(query) {
+                name.find(query.as_str())
+            } else {
+                name.to_lowercase().find(&query.to_lowercase())
+            };
+
+            if let Some(pos) = pos {
+                let before = &name[..pos];
+                let matched = &name[pos..pos + query.len()];
+                let after = &name[pos + query.len()..];
+
+                // Pad name to 24 chars
+                let padding = 24usize.saturating_sub(name.len());
+                let padded_after = format!("{}{}", after, " ".repeat(padding));
+
+                return Line::from(vec![
+                    Span::raw(before.to_string()),
+                    Span::styled(
+                        matched.to_string(),
+                        Style::default().fg(Color::Black).bg(Color::Yellow),
+                    ),
+                    Span::raw(padded_after),
+                    Span::raw(suffix),
+                ]);
+            }
+        }
+
+        Line::raw(format!("{:<24}{}", name, suffix))
+    }
+
+    /// Create a Line with search term highlighted (only in Search/SearchResults mode)
+    fn highlight_line(&self, name: &str, value: &str, width: usize) -> Line<'_> {
+        // Only highlight in Search or SearchResults mode
+        if self.mode != Mode::Search && self.mode != Mode::SearchResults {
+            return Line::raw(format!("{:<width$} = {}", name, value, width = width));
         }
 
         let query = &self.search_buffer;
@@ -740,12 +764,12 @@ impl App {
                         Style::default().fg(Color::Black).bg(Color::Yellow),
                     ),
                     Span::raw(padded_after),
-                    Span::raw(suffix.to_string()),
+                    Span::raw(format!(" = {}", value)),
                 ]);
             }
         }
 
-        Line::raw(format!("{:<width$}{}", name, suffix, width = width))
+        Line::raw(format!("{:<width$} = {}", name, value, width = width))
     }
 
     fn render_cpuid_pane(&mut self, area: Rect, buf: &mut Buffer) {
@@ -765,7 +789,7 @@ impl App {
         lines.push(features_header);
         for feature in state.features().clone() {
             let yes_no = if feature.1 { "Yes" } else { "No" };
-            lines.push(self.highlight_line(feature.0, &format!(" = {}", yes_no), 16));
+            lines.push(self.highlight_line(feature.0, yes_no, 16));
         }
 
         lines.push(empty_line.clone());
@@ -774,7 +798,7 @@ impl App {
         lines.push(extended_features_header);
         for extended_feature in state.extended_features().clone() {
             let yes_no = if extended_feature.1 { "Yes" } else { "No" };
-            lines.push(self.highlight_line(extended_feature.0, &format!(" = {}", yes_no), 16));
+            lines.push(self.highlight_line(extended_feature.0, yes_no, 16));
         }
 
         lines.push(empty_line.clone());
@@ -785,7 +809,7 @@ impl App {
         let esf = state.extended_state_features();
         for feature in esf.supports().clone() {
             let yes_no = if feature.1 { "Yes" } else { "No" };
-            lines.push(self.highlight_line(feature.0, &format!(" = {}", yes_no), 30));
+            lines.push(self.highlight_line(feature.0, yes_no, 30));
         }
 
         lines.push(empty_line);
