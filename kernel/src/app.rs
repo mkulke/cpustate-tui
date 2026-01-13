@@ -133,9 +133,14 @@ struct PaneScrollHints {
 #[derive(Default)]
 struct ScrollHints {
     cpuid: PaneScrollHints,
-    fpu: PaneScrollHints,
     #[cfg(feature = "msr")]
     msr: PaneScrollHints,
+}
+
+#[derive(Default)]
+struct FpuState {
+    scroll: PaneScrollHints,
+    has_avx2: bool,
 }
 
 /// Minimum characters before search activates
@@ -150,6 +155,7 @@ pub struct App {
     hue: u16,
     pane: Pane,
     cpuid_state: CpuidState,
+    fpu_state: FpuState,
     #[cfg(feature = "msr")]
     msr_state: Vec<MsrCategory>,
     scroll_hints: ScrollHints,
@@ -186,8 +192,10 @@ impl App {
 
         let cpuid_state = CpuidState::new();
 
+        let has_avx2 = cpuid_state.has_avx2();
+
         // Enable AVX if the CPU supports AVX2
-        if cpuid_state.has_avx2() {
+        if has_avx2 {
             enable_avx();
         }
 
@@ -198,6 +206,10 @@ impl App {
             hue: 0,
             pane: Pane::Cpuid,
             cpuid_state,
+            fpu_state: FpuState {
+                scroll: PaneScrollHints::default(),
+                has_avx2,
+            },
             #[cfg(feature = "msr")]
             msr_state,
             scroll_hints: ScrollHints::default(),
@@ -255,9 +267,9 @@ impl App {
                 self.scroll_hints.cpuid.page_height,
             ),
             Pane::Fpu => (
-                &mut self.scroll_hints.fpu.y_offset,
-                self.scroll_hints.fpu.max_offset,
-                self.scroll_hints.fpu.page_height,
+                &mut self.fpu_state.scroll.y_offset,
+                self.fpu_state.scroll.max_offset,
+                self.fpu_state.scroll.page_height,
             ),
             #[cfg(feature = "msr")]
             Pane::Msr => (
@@ -612,7 +624,7 @@ impl App {
         }
 
         // Display YMM registers if AVX2 is available
-        if self.cpuid_state.has_avx2() {
+        if self.fpu_state.has_avx2 {
             text.push(Line::raw(""));
             text.push(Line::styled("AVX2 YMM Registers", Style::default().bold()));
             let mut ymm_regs = YmmRegisters::new_zeroed();
@@ -626,11 +638,11 @@ impl App {
 
         let n_lines = text.len();
         let paragraph =
-            Paragraph::new(Text::from(text)).scroll((self.scroll_hints.fpu.y_offset, 0));
+            Paragraph::new(Text::from(text)).scroll((self.fpu_state.scroll.y_offset, 0));
         paragraph.render(area, buf);
 
-        self.scroll_hints.fpu.max_offset = (n_lines as u16).saturating_sub(area.height);
-        self.scroll_hints.fpu.page_height = area.height.saturating_sub(2);
+        self.fpu_state.scroll.max_offset = (n_lines as u16).saturating_sub(area.height);
+        self.fpu_state.scroll.page_height = area.height.saturating_sub(2);
     }
 
     fn render_xsave_pane(&self, area: Rect, buf: &mut Buffer) {
