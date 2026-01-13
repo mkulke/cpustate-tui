@@ -676,7 +676,8 @@ impl App {
                     Some(v) => format!("0x{:016x}", v),
                     None => "N/A".to_string(),
                 };
-                lines.push(self.highlight_msr_line(entry.name, entry.address, &value_str));
+                let suffix = format!(" (0x{:08X}) = {}", entry.address, value_str);
+                lines.push(self.highlight_line(entry.name, &suffix, 24));
             }
 
             // Empty line between categories (but not after the last one)
@@ -694,54 +695,11 @@ impl App {
         self.scroll_hints.msr.page_height = area.height.saturating_sub(2);
     }
 
-    /// Create a Line for MSR entry with search term highlighted
-    #[cfg(feature = "msr")]
-    fn highlight_msr_line(&self, name: &str, address: u32, value: &str) -> Line<'_> {
-        let suffix = format!(" (0x{:08X}) = {}", address, value);
-
-        // Only highlight in Search or SearchResults mode
-        if self.mode != Mode::Search && self.mode != Mode::SearchResults {
-            return Line::raw(format!("{:<24}{}", name, suffix));
-        }
-
-        let query = &self.search_buffer;
-
-        if query.len() >= MIN_SEARCH_LEN && search::smart_contains(name, query) {
-            let pos = if search::has_uppercase(query) {
-                name.find(query.as_str())
-            } else {
-                name.to_lowercase().find(&query.to_lowercase())
-            };
-
-            if let Some(pos) = pos {
-                let before = &name[..pos];
-                let matched = &name[pos..pos + query.len()];
-                let after = &name[pos + query.len()..];
-
-                // Pad name to 24 chars
-                let padding = 24usize.saturating_sub(name.len());
-                let padded_after = format!("{}{}", after, " ".repeat(padding));
-
-                return Line::from(vec![
-                    Span::raw(before.to_string()),
-                    Span::styled(
-                        matched.to_string(),
-                        Style::default().fg(Color::Black).bg(Color::Yellow),
-                    ),
-                    Span::raw(padded_after),
-                    Span::raw(suffix),
-                ]);
-            }
-        }
-
-        Line::raw(format!("{:<24}{}", name, suffix))
-    }
-
     /// Create a Line with search term highlighted (only in Search/SearchResults mode)
-    fn highlight_line(&self, name: &str, value: &str, width: usize) -> Line<'_> {
+    fn highlight_line(&self, name: &str, suffix: &str, width: usize) -> Line<'_> {
         // Only highlight in Search or SearchResults mode
         if self.mode != Mode::Search && self.mode != Mode::SearchResults {
-            return Line::raw(format!("{:<width$} = {}", name, value, width = width));
+            return Line::raw(format!("{:<width$}{}", name, suffix, width = width));
         }
 
         let query = &self.search_buffer;
@@ -770,12 +728,12 @@ impl App {
                         Style::default().fg(Color::Black).bg(Color::Yellow),
                     ),
                     Span::raw(padded_after),
-                    Span::raw(format!(" = {}", value)),
+                    Span::raw(suffix.to_string()),
                 ]);
             }
         }
 
-        Line::raw(format!("{:<width$} = {}", name, value, width = width))
+        Line::raw(format!("{:<width$}{}", name, suffix, width = width))
     }
 
     fn render_cpuid_pane(&mut self, area: Rect, buf: &mut Buffer) {
@@ -795,7 +753,7 @@ impl App {
         lines.push(features_header);
         for feature in state.features().clone() {
             let yes_no = if feature.1 { "Yes" } else { "No" };
-            lines.push(self.highlight_line(feature.0, yes_no, 16));
+            lines.push(self.highlight_line(feature.0, &format!(" = {}", yes_no), 16));
         }
 
         lines.push(empty_line.clone());
@@ -804,7 +762,7 @@ impl App {
         lines.push(extended_features_header);
         for extended_feature in state.extended_features().clone() {
             let yes_no = if extended_feature.1 { "Yes" } else { "No" };
-            lines.push(self.highlight_line(extended_feature.0, yes_no, 16));
+            lines.push(self.highlight_line(extended_feature.0, &format!(" = {}", yes_no), 16));
         }
 
         lines.push(empty_line.clone());
@@ -815,7 +773,7 @@ impl App {
         let esf = state.extended_state_features();
         for feature in esf.supports().clone() {
             let yes_no = if feature.1 { "Yes" } else { "No" };
-            lines.push(self.highlight_line(feature.0, yes_no, 30));
+            lines.push(self.highlight_line(feature.0, &format!(" = {}", yes_no), 30));
         }
 
         lines.push(empty_line);
