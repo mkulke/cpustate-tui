@@ -18,7 +18,7 @@ use crate::lapic::{lapic_timer_freq_hz, TARGET_TIMER_HZ};
 use crate::msr::{self, MsrCategory};
 use crate::qemu::{self, QemuExitCode};
 use crate::ratatui_backend::SerialAnsiBackend;
-use crate::scroll::ScrollHints;
+use crate::scroll::{ScrollDirection, ScrollHints};
 use crate::serial::{self, SerialPort};
 
 use ratatui::buffer::Buffer;
@@ -164,15 +164,6 @@ fn write_xmm_values() {
     set_xmm15_bytes(&xmm);
 }
 
-enum ScrollDirection {
-    Up,
-    Down,
-    Top,
-    Bottom,
-    PageUp,
-    PageDown,
-}
-
 impl App {
     pub fn new() -> Self {
         enable_sse();
@@ -242,48 +233,14 @@ impl App {
     }
 
     fn scroll(&mut self, direction: ScrollDirection) {
-        let (y_offset, max_offset, page_height) = match self.pane {
-            Pane::Cpuid => (
-                &mut self.scroll_hints.cpuid.y_offset,
-                self.scroll_hints.cpuid.max_offset,
-                self.scroll_hints.cpuid.page_height,
-            ),
-            Pane::Fpu => (
-                &mut self.scroll_hints.fpu.y_offset,
-                self.scroll_hints.fpu.max_offset,
-                self.scroll_hints.fpu.page_height,
-            ),
+        let hints = match self.pane {
+            Pane::Cpuid => &mut self.scroll_hints.cpuid,
+            Pane::Fpu => &mut self.scroll_hints.fpu,
             #[cfg(feature = "msr")]
-            Pane::Msr => (
-                &mut self.scroll_hints.msr.y_offset,
-                self.scroll_hints.msr.max_offset,
-                self.scroll_hints.msr.page_height,
-            ),
+            Pane::Msr => &mut self.scroll_hints.msr,
             _ => return,
         };
-
-        match direction {
-            ScrollDirection::Up => {
-                *y_offset = y_offset.saturating_sub(1);
-            }
-            ScrollDirection::Down => {
-                if *y_offset < max_offset {
-                    *y_offset = y_offset.saturating_add(1);
-                }
-            }
-            ScrollDirection::Top => {
-                *y_offset = 0;
-            }
-            ScrollDirection::Bottom => {
-                *y_offset = max_offset;
-            }
-            ScrollDirection::PageUp => {
-                *y_offset = y_offset.saturating_sub(page_height);
-            }
-            ScrollDirection::PageDown => {
-                *y_offset = (*y_offset + page_height).min(max_offset);
-            }
-        }
+        hints.scroll(direction);
     }
 
     fn pane_title(&self) -> &'static str {
@@ -428,13 +385,9 @@ impl App {
             return;
         };
         match self.pane {
-            Pane::Cpuid => {
-                self.scroll_hints.cpuid.y_offset = offset.min(self.scroll_hints.cpuid.max_offset);
-            }
+            Pane::Cpuid => self.scroll_hints.cpuid.scroll_to(offset),
             #[cfg(feature = "msr")]
-            Pane::Msr => {
-                self.scroll_hints.msr.y_offset = offset.min(self.scroll_hints.msr.max_offset);
-            }
+            Pane::Msr => self.scroll_hints.msr.scroll_to(offset),
             _ => {}
         }
     }
@@ -444,13 +397,9 @@ impl App {
             return;
         };
         match self.pane {
-            Pane::Cpuid => {
-                self.scroll_hints.cpuid.y_offset = offset.min(self.scroll_hints.cpuid.max_offset);
-            }
+            Pane::Cpuid => self.scroll_hints.cpuid.scroll_to(offset),
             #[cfg(feature = "msr")]
-            Pane::Msr => {
-                self.scroll_hints.msr.y_offset = offset.min(self.scroll_hints.msr.max_offset);
-            }
+            Pane::Msr => self.scroll_hints.msr.scroll_to(offset),
             _ => {}
         }
     }
@@ -623,8 +572,7 @@ impl App {
             Paragraph::new(Text::from(text)).scroll((self.scroll_hints.fpu.y_offset, 0));
         paragraph.render(area, buf);
 
-        self.scroll_hints.fpu.max_offset = (n_lines as u16).saturating_sub(area.height);
-        self.scroll_hints.fpu.page_height = area.height.saturating_sub(2);
+        self.scroll_hints.fpu.update_from_render(n_lines, area.height);
     }
 
     fn render_xsave_pane(&self, area: Rect, buf: &mut Buffer) {
@@ -684,8 +632,7 @@ impl App {
 
         paragraph.render(area, buf);
 
-        self.scroll_hints.msr.max_offset = (n_lines as u16).saturating_sub(area.height);
-        self.scroll_hints.msr.page_height = area.height.saturating_sub(2);
+        self.scroll_hints.msr.update_from_render(n_lines, area.height);
     }
 
     /// Create a Line for MSR entry with search term highlighted
@@ -824,8 +771,7 @@ impl App {
 
         paragraph.render(area, buf);
 
-        self.scroll_hints.cpuid.max_offset = (n_lines as u16).saturating_sub(area.height);
-        self.scroll_hints.cpuid.page_height = area.height.saturating_sub(2);
+        self.scroll_hints.cpuid.update_from_render(n_lines, area.height);
     }
 }
 
