@@ -240,7 +240,6 @@ impl Widget for &mut FpuState {
         let paragraph = Paragraph::new(Text::from(text)).scroll((self.scroll.y_offset, 0));
         paragraph.render(area, buf);
 
-        self.scroll.max_offset = (n_lines as u16).saturating_sub(area.height);
-        self.scroll.page_height = area.height.saturating_sub(2);
+        self.scroll.update_from_render(n_lines, area.height);
     }
 }

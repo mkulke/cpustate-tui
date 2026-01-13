@@ -2,15 +2,11 @@ use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec;
 use alloc::vec::Vec;
-use core::fmt::LowerHex;
 use core::sync::atomic::Ordering;
 use x86_64::instructions;
 
 use crate::cpuid::{self, CpuFeatures, ExtendedStateFeatures, VendorInfo};
-use crate::fpu::{
-    enable_avx, enable_sse, fxsave64, read_ymm_registers, set_xmm0_bytes, set_xmm15_bytes,
-    FxSaveAligned, YmmRegisters,
-};
+use crate::fpu::{enable_avx, enable_sse, set_xmm0_bytes, set_xmm15_bytes, FpuState};
 use crate::input::{Input, InputEvent};
 use crate::interrupts;
 use crate::lapic::{lapic_timer_freq_hz, TARGET_TIMER_HZ};
@@ -24,31 +20,9 @@ use crate::serial::{self, SerialPort};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Style};
-use ratatui::text::{Line, Span, Text};
+use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Widget};
 use ratatui::Terminal;
-
-struct XmmBytes([u8; 16]);
-
-impl LowerHex for XmmBytes {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        for &b in self.0.iter().rev() {
-            write!(f, "{:02x}", b)?;
-        }
-        Ok(())
-    }
-}
-
-struct YmmBytes([u8; 32]);
-
-impl LowerHex for YmmBytes {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        for &b in self.0.iter().rev() {
-            write!(f, "{:02x}", b)?;
-        }
-        Ok(())
-    }
-}
 
 pub struct CpuidState {
     features: CpuFeatures,
@@ -127,7 +101,6 @@ pub enum Mode {
 #[derive(Default)]
 struct PaneScrollHints {
     cpuid: ScrollHints,
-    fpu: ScrollHints,
     #[cfg(feature = "msr")]
     msr: ScrollHints,
 }
@@ -144,6 +117,7 @@ pub struct App {
     hue: u16,
     pane: Pane,
     cpuid_state: CpuidState,
+    fpu_state: FpuState,
     #[cfg(feature = "msr")]
     msr_state: Vec<MsrCategory>,
     scroll_hints: PaneScrollHints,
@@ -170,9 +144,10 @@ impl App {
         write_xmm_values();
 
         let cpuid_state = CpuidState::new();
+        let has_avx2 = cpuid_state.has_avx2();
 
         // Enable AVX if the CPU supports AVX2
-        if cpuid_state.has_avx2() {
+        if has_avx2 {
             enable_avx();
         }
 
@@ -183,6 +158,7 @@ impl App {
             hue: 0,
             pane: Pane::Cpuid,
             cpuid_state,
+            fpu_state: FpuState::new(has_avx2),
             #[cfg(feature = "msr")]
             msr_state,
             scroll_hints: PaneScrollHints::default(),
@@ -235,7 +211,7 @@ impl App {
     fn scroll(&mut self, direction: ScrollDirection) {
         let hints = match self.pane {
             Pane::Cpuid => &mut self.scroll_hints.cpuid,
-            Pane::Fpu => &mut self.scroll_hints.fpu,
+            Pane::Fpu => &mut self.fpu_state.scroll,
             #[cfg(feature = "msr")]
             Pane::Msr => &mut self.scroll_hints.msr,
             _ => return,
@@ -252,12 +228,6 @@ impl App {
             #[cfg(feature = "msr")]
             Pane::Msr => "MSR",
         }
-    }
-
-    fn fxsave64(&self) -> FxSaveAligned {
-        let mut area = FxSaveAligned::new_zeroed();
-        fxsave64(&mut area);
-        area
     }
 
     fn handle_input(&mut self, input: &mut Input) -> Option<InputEvent> {
@@ -542,39 +512,6 @@ impl App {
         paragraph.render(area, buf);
     }
 
-    fn render_fpu_pane(&mut self, area: Rect, buf: &mut Buffer) {
-        let fp_area = self.fxsave64();
-
-        let header = Line::styled("fxsave64", Style::default().bold());
-        let line = Line::raw(format!("mcxsr=0x{:x}", fp_area.0.mxcsr));
-        let mut text = vec![header, line];
-        for i in 0..16 {
-            let value = XmmBytes(fp_area.0.xmm[i]);
-            let line = format!("xmm{:02}={:x}", i, value);
-            text.push(Line::raw(line));
-        }
-
-        // Display YMM registers if AVX2 is available
-        if self.cpuid_state.has_avx2() {
-            text.push(Line::raw(""));
-            text.push(Line::styled("AVX2 YMM Registers", Style::default().bold()));
-            let mut ymm_regs = YmmRegisters::new_zeroed();
-            read_ymm_registers(&mut ymm_regs);
-            for i in 0..16 {
-                let value = YmmBytes(ymm_regs.ymm[i]);
-                let line = format!("ymm{:02}={:x}", i, value);
-                text.push(Line::raw(line));
-            }
-        }
-
-        let n_lines = text.len();
-        let paragraph =
-            Paragraph::new(Text::from(text)).scroll((self.scroll_hints.fpu.y_offset, 0));
-        paragraph.render(area, buf);
-
-        self.scroll_hints.fpu.update_from_render(n_lines, area.height);
-    }
-
     fn render_xsave_pane(&self, area: Rect, buf: &mut Buffer) {
         let state = &self.cpuid_state;
         let line_1 = format!("Leaf 0x1 reports XSAVE: {}", state.has_xsave());
@@ -790,7 +727,7 @@ impl Widget for &mut App {
         pane_block.render(pane_area, buf);
 
         match self.pane {
-            Pane::Fpu => self.render_fpu_pane(block_inner, buf),
+            Pane::Fpu => (&mut self.fpu_state).render(block_inner, buf),
             Pane::Xsave => self.render_xsave_pane(block_inner, buf),
             Pane::Cpuid => self.render_cpuid_pane(block_inner, buf),
             Pane::Timer => self.render_timer_pane(block_inner, buf),
