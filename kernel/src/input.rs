@@ -1,4 +1,5 @@
 use crate::app::{App, Mode, Pane};
+use crate::interrupts;
 use crate::lapic::TARGET_TIMER_HZ;
 
 const SEQUENCE_TIMEOUT_TICKS: usize = (TARGET_TIMER_HZ / 2) as usize;
@@ -40,8 +41,8 @@ impl Input {
         }
     }
 
-    fn handle_sequence(&mut self, app: &App, seq: Sequence) -> bool {
-        let now = app.tick_count();
+    fn handle_sequence(&mut self, seq: Sequence) -> bool {
+        let now = interrupts::tick_count();
         // no sequence in progress
         let Some(seq) = &mut self.in_sequence else {
             self.in_sequence = Some(seq);
@@ -107,7 +108,7 @@ impl Input {
                     0x06 => Some(InputEvent::PageDown), // Ctrl+F
                     0x02 => Some(InputEvent::PageUp),   // Ctrl+B
                     b'g' => {
-                        let sequence_finalized = self.handle_sequence(app, Sequence::gg);
+                        let sequence_finalized = self.handle_sequence(Sequence::gg);
                         sequence_finalized.then_some(InputEvent::ScrollToTop)
                     }
                     _ => {

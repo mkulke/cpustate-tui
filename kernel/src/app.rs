@@ -5,17 +5,17 @@ use alloc::vec::Vec;
 use core::sync::atomic::Ordering;
 use x86_64::instructions;
 
-use crate::cpuid::{self, CpuFeatures, ExtendedStateFeatures, VendorInfo};
-use crate::fpu::{enable_avx, enable_sse, set_xmm0_bytes, set_xmm15_bytes, FpuState};
+use crate::cpuid::CpuidState;
+use crate::fpu::FpuState;
 use crate::input::{Input, InputEvent};
 use crate::interrupts;
-use crate::lapic::{lapic_timer_freq_hz, TARGET_TIMER_HZ};
 #[cfg(feature = "msr")]
 use crate::msr::{self, MsrCategory};
 use crate::qemu::{self, QemuExitCode};
 use crate::ratatui_backend::SerialAnsiBackend;
 use crate::scroll::{ScrollDirection, ScrollHints};
 use crate::serial::{self, SerialPort};
+use crate::timer::TimerState;
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -23,62 +23,6 @@ use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Widget};
 use ratatui::Terminal;
-
-pub struct CpuidState {
-    features: CpuFeatures,
-}
-
-impl CpuidState {
-    fn new() -> Self {
-        let features = CpuFeatures::new();
-
-        Self { features }
-    }
-
-    fn features(&self) -> &Vec<(&'static str, bool)> {
-        self.features.features()
-    }
-
-    fn extended_features(&self) -> &Vec<(&'static str, bool)> {
-        self.features.extended_features()
-    }
-
-    fn extended_state_features(&self) -> &ExtendedStateFeatures {
-        self.features.extended_state_features()
-    }
-
-    fn vendor_info(&self) -> &VendorInfo {
-        self.features.vendor_info()
-    }
-
-    fn has_xsave(&self) -> bool {
-        self.features.has_xsave()
-    }
-
-    fn leaf_0xd_0(&self) -> [u32; 4] {
-        self.features.leaf(0xD, 0)
-    }
-
-    fn leaf_0xd_1(&self) -> [u32; 4] {
-        self.features.leaf(0xD, 1)
-    }
-
-    fn leaf_0x1_0(&self) -> [u32; 4] {
-        self.features.leaf(0x1, 0)
-    }
-
-    fn has_avx2(&self) -> bool {
-        self.features.has_avx2()
-    }
-
-    fn leaf(&self, leaf: u32, subleaf: u32) -> [u32; 4] {
-        self.features.leaf(leaf, subleaf)
-    }
-
-    fn cpu_features(&self) -> &CpuFeatures {
-        &self.features
-    }
-}
 
 #[derive(PartialEq, Clone, Copy)]
 pub enum Pane {
@@ -114,58 +58,40 @@ struct SearchState {
 }
 
 pub struct App {
-    hue: u16,
     pane: Pane,
     cpuid_state: CpuidState,
     fpu_state: FpuState,
+    timer_state: TimerState,
     #[cfg(feature = "msr")]
     msr_state: Vec<MsrCategory>,
     scroll_hints: PaneScrollHints,
     mode: Mode,
     search_buffer: String,
     search_state: SearchState,
-    tick_count: usize,
-}
-
-fn write_xmm_values() {
-    let mut xmm = [0u8; 16];
-    let a = 0x0011223344556677u64;
-    let b = 0x8899AABBCCDDEEFFu64;
-    xmm[0..8].copy_from_slice(&a.to_le_bytes());
-    xmm[8..16].copy_from_slice(&b.to_le_bytes());
-    set_xmm0_bytes(&xmm);
-    xmm.reverse();
-    set_xmm15_bytes(&xmm);
 }
 
 impl App {
     pub fn new() -> Self {
-        enable_sse();
-        write_xmm_values();
-
         let cpuid_state = CpuidState::new();
-        let has_avx2 = cpuid_state.has_avx2();
 
-        // Enable AVX if the CPU supports AVX2
-        if has_avx2 {
-            enable_avx();
-        }
+        let timer_state = TimerState::new(cpuid_state.leaf(0x15, 0), cpuid_state.leaf(0x16, 0));
 
         #[cfg(feature = "msr")]
         let msr_state = msr::read_all_msrs(cpuid_state.cpu_features());
 
+        let fpu_state = FpuState::new(&cpuid_state);
+
         Self {
-            hue: 0,
             pane: Pane::Cpuid,
             cpuid_state,
-            fpu_state: FpuState::new(has_avx2),
+            fpu_state,
+            timer_state,
             #[cfg(feature = "msr")]
             msr_state,
             scroll_hints: PaneScrollHints::default(),
             mode: Mode::default(),
             search_buffer: String::new(),
             search_state: SearchState::default(),
-            tick_count: 0,
         }
     }
 
@@ -173,39 +99,12 @@ impl App {
         self.mode
     }
 
+    pub fn timer_state(&self) -> &TimerState {
+        &self.timer_state
+    }
+
     pub fn pane(&self) -> Pane {
         self.pane
-    }
-
-    pub fn tick_count(&self) -> usize {
-        self.tick_count
-    }
-
-    fn tick(&mut self) {
-        // Advance hue by 5 degrees every 500ms (full cycle in 72 ticks = 36 seconds)
-        self.hue = (self.hue + 5) % 360;
-    }
-
-    /// Convert HSV to RGB. Hue: 0-359, Saturation/Value: fixed at 1.0 for vibrant colors.
-    fn hsv_to_rgb(hue: u16) -> (u8, u8, u8) {
-        let h = hue % 360;
-        let sector = h / 60;
-        let f = (h % 60) as u32 * 255 / 60; // fractional part scaled to 0-255
-
-        let (r, g, b) = match sector {
-            0 => (255, f as u8, 0),       // Red -> Yellow
-            1 => (255 - f as u8, 255, 0), // Yellow -> Green
-            2 => (0, 255, f as u8),       // Green -> Cyan
-            3 => (0, 255 - f as u8, 255), // Cyan -> Blue
-            4 => (f as u8, 0, 255),       // Blue -> Magenta
-            _ => (255, 0, 255 - f as u8), // Magenta -> Red
-        };
-        (r, g, b)
-    }
-
-    fn color(&self) -> Color {
-        let (r, g, b) = Self::hsv_to_rgb(self.hue);
-        Color::Rgb(r, g, b)
     }
 
     fn scroll(&mut self, direction: ScrollDirection) {
@@ -248,16 +147,11 @@ impl App {
     }
 
     fn handle_ticks(&mut self) -> bool {
-        let color_events = interrupts::PRINT_EVENTS.swap(0, Ordering::AcqRel);
-        for _ in 0..color_events {
-            self.tick();
-        }
-
         let second_events = interrupts::SECOND_EVENTS.swap(0, Ordering::AcqRel);
-        color_events > 0 || second_events > 0
+        second_events > 0
     }
 
-    /// Perform search on CPUID features, updating matches and scrolling to first match
+    /// Perform search on key, updating matches and scrolling to first match
     fn perform_search(&mut self) {
         let query = self.search_buffer.clone();
 
@@ -394,10 +288,11 @@ impl App {
         loop {
             instructions::hlt();
 
-            self.tick_count = interrupts::tick_count();
-
+            /* update at least once per second */
+            self.timer_state.refresh();
             let mut needs_redraw = self.handle_ticks();
 
+            /* react to input */
             let event = self.handle_input(&mut input);
             if let Some(event) = event {
                 match event {
@@ -438,78 +333,6 @@ impl App {
                 needs_redraw = false;
             }
         }
-    }
-
-    fn render_timer_pane(&self, area: Rect, buf: &mut Buffer) {
-        let mut lines = vec![Line::styled("Timer Calibration", Style::default().bold())];
-        lines.push(Line::raw(""));
-
-        // TSC frequency from CPUID
-        let tsc_freq_str = match cpuid::tsc_frequency() {
-            Some(freq) => format!("{} Hz ({:.2} GHz)", freq, freq as f64 / 1_000_000_000.0),
-            None => "Not available".into(),
-        };
-        lines.push(Line::raw(format!(
-            "{:<18}{}",
-            "TSC Frequency:", tsc_freq_str
-        )));
-
-        // Calibrated LAPIC timer frequency
-        let lapic_freq_str = match lapic_timer_freq_hz() {
-            Some(freq) => format!("{} Hz ({:.2} MHz)", freq, freq as f64 / 1_000_000.0),
-            None => "Not calibrated".into(),
-        };
-        lines.push(Line::raw(format!(
-            "{:<18}{}",
-            "LAPIC Timer Freq:", lapic_freq_str
-        )));
-
-        lines.push(Line::raw(format!(
-            "{:<18}{}",
-            "Target Timer Hz:", TARGET_TIMER_HZ
-        )));
-        lines.push(Line::raw(format!(
-            "{:<18}{}",
-            "Current Ticks:", self.tick_count
-        )));
-        lines.push(Line::raw(""));
-
-        // Raw CPUID leaf diagnostics
-        lines.push(Line::styled("CPUID Diagnostics", Style::default().bold()));
-        let [eax, ebx, ecx, _] = self.cpuid_state.leaf(0x15, 0);
-        lines.push(Line::raw(format!(
-            "Leaf 0x15: denom={} numer={} crystal_hz={}",
-            eax, ebx, ecx
-        )));
-        let [eax, ebx, ecx, _] = self.cpuid_state.leaf(0x16, 0);
-        lines.push(Line::raw(format!(
-            "Leaf 0x16: base={}MHz max={}MHz bus={}MHz",
-            eax & 0xFFFF,
-            ebx & 0xFFFF,
-            ecx & 0xFFFF
-        )));
-        lines.push(Line::raw(""));
-
-        // Misc section with uptime
-        lines.push(Line::styled("Misc", Style::default().bold()));
-        let total_seconds = self.tick_count as u64 / TARGET_TIMER_HZ;
-        let uptime_str = if total_seconds >= 120 * 60 {
-            // >= 120 minutes: show hours only
-            format!("{} hours", total_seconds / 3600)
-        } else if total_seconds >= 120 {
-            // >= 120 seconds: show minutes only
-            format!("{} minutes", total_seconds / 60)
-        } else if total_seconds >= 60 {
-            // 60-119 seconds: show "1 minute X seconds"
-            format!("1 minute {} seconds", total_seconds - 60)
-        } else {
-            format!("{} seconds", total_seconds)
-        };
-        let uptime_span = Span::styled(uptime_str, Style::default().fg(self.color()));
-        lines.push(Line::from(vec![Span::raw("Uptime: "), uptime_span]));
-
-        let paragraph = Paragraph::new(lines);
-        paragraph.render(area, buf);
     }
 
     fn render_xsave_pane(&self, area: Rect, buf: &mut Buffer) {
@@ -569,7 +392,9 @@ impl App {
 
         paragraph.render(area, buf);
 
-        self.scroll_hints.msr.update_from_render(n_lines, area.height);
+        self.scroll_hints
+            .msr
+            .update_from_render(n_lines, area.height);
     }
 
     /// Create a Line for MSR entry with search term highlighted
@@ -708,7 +533,9 @@ impl App {
 
         paragraph.render(area, buf);
 
-        self.scroll_hints.cpuid.update_from_render(n_lines, area.height);
+        self.scroll_hints
+            .cpuid
+            .update_from_render(n_lines, area.height);
     }
 }
 
@@ -730,7 +557,7 @@ impl Widget for &mut App {
             Pane::Fpu => (&mut self.fpu_state).render(block_inner, buf),
             Pane::Xsave => self.render_xsave_pane(block_inner, buf),
             Pane::Cpuid => self.render_cpuid_pane(block_inner, buf),
-            Pane::Timer => self.render_timer_pane(block_inner, buf),
+            Pane::Timer => (&mut self.timer_state).render(block_inner, buf),
             #[cfg(feature = "msr")]
             Pane::Msr => self.render_msr_pane(block_inner, buf),
         }

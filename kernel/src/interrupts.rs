@@ -9,11 +9,7 @@ use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame};
 
 static IDT: Once<InterruptDescriptorTable> = Once::new();
 static TICK_COUNT: AtomicUsize = AtomicUsize::new(0);
-pub static PRINT_EVENTS: AtomicUsize = AtomicUsize::new(0);
 pub static SECOND_EVENTS: AtomicUsize = AtomicUsize::new(0);
-
-/// Ticks per color change (1 second at TARGET_TIMER_HZ)
-const TICKS_PER_EVENT: usize = TARGET_TIMER_HZ as usize;
 
 /// Ticks per second
 const TICKS_PER_SECOND: usize = TARGET_TIMER_HZ as usize;
@@ -32,10 +28,6 @@ extern "x86-interrupt" fn timer_interrupt_handler(_sf: InterruptStackFrame) {
 
     if ticks.is_multiple_of(TICKS_PER_SECOND) {
         SECOND_EVENTS.fetch_add(1, Ordering::Relaxed);
-    }
-
-    if ticks.is_multiple_of(TICKS_PER_EVENT) {
-        PRINT_EVENTS.fetch_add(1, Ordering::Relaxed);
     }
 
     lapic().eoi();

@@ -11,6 +11,7 @@ use ratatui::widgets::{Paragraph, Widget};
 use x86_64::registers::control::{Cr0, Cr0Flags, Cr4, Cr4Flags};
 use x86_64::registers::xcontrol::{XCr0, XCr0Flags};
 
+use crate::cpuid::CpuidState;
 use crate::scroll::ScrollHints;
 
 #[inline(always)]
@@ -195,8 +196,27 @@ pub struct FpuState {
     pub has_avx2: bool,
 }
 
+fn write_xmm_values() {
+    let mut xmm = [0u8; 16];
+    let a = 0x0011223344556677u64;
+    let b = 0x8899AABBCCDDEEFFu64;
+    xmm[0..8].copy_from_slice(&a.to_le_bytes());
+    xmm[8..16].copy_from_slice(&b.to_le_bytes());
+    set_xmm0_bytes(&xmm);
+    xmm.reverse();
+    set_xmm15_bytes(&xmm);
+}
+
 impl FpuState {
-    pub fn new(has_avx2: bool) -> Self {
+    pub fn new(cpuid_state: &CpuidState) -> Self {
+        enable_sse();
+        write_xmm_values();
+
+        let has_avx2 = cpuid_state.has_avx2();
+        if has_avx2 {
+            enable_avx();
+        }
+
         Self {
             scroll: ScrollHints::default(),
             has_avx2,

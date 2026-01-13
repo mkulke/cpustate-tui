@@ -1,6 +1,62 @@
 use alloc::vec::Vec;
 use raw_cpuid::{CpuId, CpuIdReaderNative};
 
+pub struct CpuidState {
+    features: CpuFeatures,
+}
+
+impl CpuidState {
+    pub fn new() -> Self {
+        let features = CpuFeatures::new();
+
+        Self { features }
+    }
+
+    pub fn features(&self) -> &Vec<(&'static str, bool)> {
+        self.features.features()
+    }
+
+    pub fn extended_features(&self) -> &Vec<(&'static str, bool)> {
+        self.features.extended_features()
+    }
+
+    pub fn extended_state_features(&self) -> &ExtendedStateFeatures {
+        self.features.extended_state_features()
+    }
+
+    pub fn vendor_info(&self) -> &VendorInfo {
+        self.features.vendor_info()
+    }
+
+    pub fn has_xsave(&self) -> bool {
+        self.features.has_xsave()
+    }
+
+    pub fn leaf_0xd_0(&self) -> [u32; 4] {
+        self.features.leaf(0xD, 0)
+    }
+
+    pub fn leaf_0xd_1(&self) -> [u32; 4] {
+        self.features.leaf(0xD, 1)
+    }
+
+    pub fn leaf_0x1_0(&self) -> [u32; 4] {
+        self.features.leaf(0x1, 0)
+    }
+
+    pub fn has_avx2(&self) -> bool {
+        self.features.has_avx2()
+    }
+
+    pub fn leaf(&self, leaf: u32, subleaf: u32) -> [u32; 4] {
+        self.features.leaf(leaf, subleaf)
+    }
+
+    pub fn cpu_features(&self) -> &CpuFeatures {
+        &self.features
+    }
+}
+
 pub struct ExtendedStateFeatures {
     supports: Vec<(&'static str, bool)>,
     sizes: Vec<(&'static str, u32)>,
