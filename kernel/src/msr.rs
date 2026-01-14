@@ -1,9 +1,16 @@
 //! Model Specific Register (MSR) reading and display
 
-use crate::cpuid::CpuFeatures;
-use crate::pane::{Scrollable, Searchable};
-use crate::pane::ScrollHints;
+use alloc::format;
 use alloc::vec::Vec;
+
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
+use ratatui::style::Style;
+use ratatui::text::Line;
+use ratatui::widgets::{Paragraph, Widget};
+
+use crate::cpuid::CpuFeatures;
+use crate::pane::{highlight_line, ScrollHints, Scrollable, Searchable};
 
 /// MSR entry with name, address, and value
 pub struct MsrEntry {
@@ -236,5 +243,44 @@ impl Searchable for MsrPane {
         }
 
         items
+    }
+}
+
+impl Widget for &mut MsrPane {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        let query = if self.search.last_query.is_empty() {
+            None
+        } else {
+            Some(self.search.last_query.as_str())
+        };
+
+        let mut lines: Vec<Line> = Vec::new();
+        let num_categories = self.categories.len();
+
+        for (i, category) in self.categories.iter().enumerate() {
+            // Category header
+            lines.push(Line::styled(category.name, Style::default().bold()));
+
+            for entry in &category.entries {
+                let value_str = match entry.value {
+                    Some(v) => format!("0x{:016x}", v),
+                    None => "N/A".into(),
+                };
+                let suffix = format!(" (0x{:08X}) = {}", entry.address, value_str);
+                lines.push(highlight_line(entry.name, &suffix, 24, query));
+            }
+
+            // Empty line between categories (but not after the last one)
+            if i < num_categories - 1 {
+                lines.push(Line::raw(""));
+            }
+        }
+
+        let n_lines = lines.len();
+        let paragraph = Paragraph::new(lines).scroll((self.scroll.y_offset, 0));
+
+        paragraph.render(area, buf);
+
+        self.scroll.update_from_render(n_lines, area.height);
     }
 }

@@ -1,8 +1,15 @@
+use alloc::format;
+use alloc::vec;
 use alloc::vec::Vec;
 use raw_cpuid::{CpuId, CpuIdReaderNative};
 
-use crate::pane::{Scrollable, Searchable};
-use crate::pane::ScrollHints;
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
+use ratatui::style::Style;
+use ratatui::text::Line;
+use ratatui::widgets::{Paragraph, Widget};
+
+use crate::pane::{highlight_line, ScrollHints, Scrollable, Searchable};
 
 pub struct CpuidState {
     features: CpuFeatures,
@@ -491,5 +498,70 @@ impl Searchable for CpuidPane {
         }
 
         items
+    }
+}
+
+impl Widget for &mut CpuidPane {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        let query = if self.search.last_query.is_empty() {
+            None
+        } else {
+            Some(self.search.last_query.as_str())
+        };
+
+        let vendor_info = self.state.vendor_info();
+        let vendor_header: Line = Line::styled("CPU Vendor:", Style::default().bold());
+        let amd = if vendor_info.amd { "Yes" } else { "No" };
+        let amd_line = Line::raw(format!("{:<8} = {}", "AMD", amd));
+        let intel = if vendor_info.intel { "Yes" } else { "No" };
+        let intel_line = Line::raw(format!("{:<8} = {}", "Intel", intel));
+        let mut lines = vec![vendor_header, amd_line, intel_line];
+
+        let empty_line = Line::raw("");
+        lines.push(empty_line.clone());
+
+        let features_header = Line::styled("CPU Features:", Style::default().bold());
+        lines.push(features_header);
+        for feature in self.state.features().clone() {
+            let yes_no = if feature.1 { "Yes" } else { "No" };
+            let suffix = format!(" = {}", yes_no);
+            lines.push(highlight_line(feature.0, &suffix, 16, query));
+        }
+
+        lines.push(empty_line.clone());
+
+        let extended_features_header = Line::styled("Extended Features:", Style::default().bold());
+        lines.push(extended_features_header);
+        for extended_feature in self.state.extended_features().clone() {
+            let yes_no = if extended_feature.1 { "Yes" } else { "No" };
+            let suffix = format!(" = {}", yes_no);
+            lines.push(highlight_line(extended_feature.0, &suffix, 16, query));
+        }
+
+        lines.push(empty_line.clone());
+
+        let extended_state_features_header =
+            Line::styled("Extended State Features:", Style::default().bold());
+        lines.push(extended_state_features_header);
+        let esf = self.state.extended_state_features();
+        for feature in esf.supports().clone() {
+            let yes_no = if feature.1 { "Yes" } else { "No" };
+            let suffix = format!(" = {}", yes_no);
+            lines.push(highlight_line(feature.0, &suffix, 30, query));
+        }
+
+        lines.push(empty_line);
+
+        for size_feature in esf.sizes() {
+            let line = Line::raw(format!("{:<34} = {} bytes", size_feature.0, size_feature.1));
+            lines.push(line);
+        }
+
+        let n_lines = lines.len();
+        let paragraph = Paragraph::new(lines).scroll((self.scroll.y_offset, 0));
+
+        paragraph.render(area, buf);
+
+        self.scroll.update_from_render(n_lines, area.height);
     }
 }

@@ -1,7 +1,6 @@
 use alloc::format;
 use alloc::string::String;
 use alloc::vec;
-use alloc::vec::Vec;
 use core::sync::atomic::Ordering;
 use x86_64::instructions;
 
@@ -11,7 +10,7 @@ use crate::input::{Input, InputEvent};
 use crate::interrupts;
 #[cfg(feature = "msr")]
 use crate::msr::MsrPane;
-use crate::pane::{highlight_line, ScrollDirection, Scrollable, Searchable, MIN_SEARCH_LEN};
+use crate::pane::{ScrollDirection, Scrollable, Searchable, MIN_SEARCH_LEN};
 use crate::qemu::{self, QemuExitCode};
 use crate::ratatui_backend::SerialAnsiBackend;
 use crate::serial::{self, SerialPort};
@@ -22,7 +21,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph, Widget};
+use ratatui::widgets::{Block, Borders, Widget};
 use ratatui::Terminal;
 
 #[derive(PartialEq, Clone, Copy)]
@@ -93,15 +92,6 @@ impl App {
 
     pub fn pane(&self) -> Pane {
         self.pane
-    }
-
-    /// Returns search query if in search mode, None otherwise
-    fn search_query(&self) -> Option<&str> {
-        if self.mode == Mode::Search || self.mode == Mode::SearchResults {
-            Some(&self.search_buffer)
-        } else {
-            None
-        }
     }
 
     fn scroll(&mut self, direction: ScrollDirection) {
@@ -276,109 +266,6 @@ impl App {
             }
         }
     }
-
-    #[cfg(feature = "msr")]
-    fn render_msr_pane(&mut self, area: Rect, buf: &mut Buffer) {
-        let query = self.search_query().map(String::from);
-        let query_ref = query.as_deref();
-
-        let mut lines: Vec<Line> = Vec::new();
-        let categories = self.msr_pane.categories();
-        let num_categories = categories.len();
-
-        for (i, category) in categories.iter().enumerate() {
-            // Category header
-            lines.push(Line::styled(category.name, Style::default().bold()));
-
-            for entry in &category.entries {
-                let value_str = match entry.value {
-                    Some(v) => format!("0x{:016x}", v),
-                    None => "N/A".into(),
-                };
-                let suffix = format!(" (0x{:08X}) = {}", entry.address, value_str);
-                lines.push(highlight_line(entry.name, &suffix, 24, query_ref));
-            }
-
-            // Empty line between categories (but not after the last one)
-            if i < num_categories - 1 {
-                lines.push(Line::raw(""));
-            }
-        }
-
-        let n_lines = lines.len();
-        let y_offset = self.msr_pane.scroll_hints_mut().y_offset;
-        let paragraph = Paragraph::new(lines).scroll((y_offset, 0));
-
-        paragraph.render(area, buf);
-
-        self.msr_pane
-            .scroll_hints_mut()
-            .update_from_render(n_lines, area.height);
-    }
-
-    fn render_cpuid_pane(&mut self, area: Rect, buf: &mut Buffer) {
-        let query = self.search_query().map(String::from);
-        let query_ref = query.as_deref();
-
-        let state = self.cpuid_pane.state();
-        let vendor_info = state.vendor_info();
-        let vendor_header: Line = Line::styled("CPU Vendor:", Style::default().bold());
-        let amd = if vendor_info.amd { "Yes" } else { "No" };
-        let amd_line = Line::raw(format!("{:<8} = {}", "AMD", amd));
-        let intel = if vendor_info.intel { "Yes" } else { "No" };
-        let intel_line = Line::raw(format!("{:<8} = {}", "Intel", intel));
-        let mut lines = vec![vendor_header, amd_line, intel_line];
-
-        let empty_line = Line::raw("");
-        lines.push(empty_line.clone());
-
-        let features_header = Line::styled("CPU Features:", Style::default().bold());
-        lines.push(features_header);
-        for feature in state.features().clone() {
-            let yes_no = if feature.1 { "Yes" } else { "No" };
-            let suffix = format!(" = {}", yes_no);
-            lines.push(highlight_line(feature.0, &suffix, 16, query_ref));
-        }
-
-        lines.push(empty_line.clone());
-
-        let extended_features_header = Line::styled("Extended Features:", Style::default().bold());
-        lines.push(extended_features_header);
-        for extended_feature in state.extended_features().clone() {
-            let yes_no = if extended_feature.1 { "Yes" } else { "No" };
-            let suffix = format!(" = {}", yes_no);
-            lines.push(highlight_line(extended_feature.0, &suffix, 16, query_ref));
-        }
-
-        lines.push(empty_line.clone());
-
-        let extended_state_features_header =
-            Line::styled("Extended State Features:", Style::default().bold());
-        lines.push(extended_state_features_header);
-        let esf = state.extended_state_features();
-        for feature in esf.supports().clone() {
-            let yes_no = if feature.1 { "Yes" } else { "No" };
-            let suffix = format!(" = {}", yes_no);
-            lines.push(highlight_line(feature.0, &suffix, 30, query_ref));
-        }
-
-        lines.push(empty_line);
-
-        for size_feature in esf.sizes() {
-            let line = Line::raw(format!("{:<34} = {} bytes", size_feature.0, size_feature.1));
-            lines.push(line);
-        }
-
-        let n_lines = lines.len();
-        let y_offset = self.cpuid_pane.scroll_hints_mut().y_offset;
-        let paragraph = Paragraph::new(lines).scroll((y_offset, 0));
-
-        paragraph.render(area, buf);
-
-        self.cpuid_pane
-            .scroll_hints_mut()
-            .update_from_render(n_lines, area.height);
-    }
 }
 
 impl Widget for &mut App {
@@ -398,10 +285,10 @@ impl Widget for &mut App {
         match self.pane {
             Pane::Fpu => (&mut self.fpu_state).render(block_inner, buf),
             Pane::Xsave => (&self.xsave_state).render(block_inner, buf),
-            Pane::Cpuid => self.render_cpuid_pane(block_inner, buf),
+            Pane::Cpuid => (&mut self.cpuid_pane).render(block_inner, buf),
             Pane::Timer => (&self.timer_state).render(block_inner, buf),
             #[cfg(feature = "msr")]
-            Pane::Msr => self.render_msr_pane(block_inner, buf),
+            Pane::Msr => (&mut self.msr_pane).render(block_inner, buf),
         }
 
         if self.mode == Mode::Search {
