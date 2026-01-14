@@ -1,5 +1,7 @@
 # CPU State TUI
 
+[![Built With Ratatui](https://ratatui.rs/built-with-ratatui/badge.svg)](https://ratatui.rs/)
+
 Baremetal program to visualize x86_64 CPU state. Written in Rust with [bootloader-rs](github.com/rust-osdev/bootloader) and [ratatui](github.com/ratatui/ratatui).
 
 Co-authored by Claude Opus 4.5 using GitHub's copilot-cli project.
