@@ -23,7 +23,6 @@ mod msr;
 mod pane;
 mod qemu;
 mod ratatui_backend;
-// mod scroll;
 mod serial;
 mod timer;
 

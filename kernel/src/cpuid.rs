@@ -421,6 +421,7 @@ fn build_features(cpuid: &CpuId<CpuIdReaderNative>) -> Vec<(&'static str, bool)>
 pub struct CpuidPane {
     state: CpuidState,
     scroll: ScrollHints,
+    search: search::SearchState,
 }
 
 impl CpuidPane {
@@ -428,11 +429,16 @@ impl CpuidPane {
         Self {
             state: CpuidState::new(),
             scroll: ScrollHints::default(),
+            search: search::SearchState::default(),
         }
     }
 
     pub fn state(&self) -> &CpuidState {
         &self.state
+    }
+
+    pub fn search_state(&self) -> &search::SearchState {
+        &self.search
     }
 
     /// Line offset where features section starts
@@ -456,6 +462,10 @@ impl Scrollable for CpuidPane {
 }
 
 impl Searchable for CpuidPane {
+    fn search_state_mut(&mut self) -> &mut search::SearchState {
+        &mut self.search
+    }
+
     fn search_items(&self) -> Vec<(&str, u16)> {
         let mut items = Vec::new();
 

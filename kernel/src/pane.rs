@@ -81,36 +81,50 @@ pub trait Scrollable {
 
 /// Trait for panes that support search - implies scrollable content
 pub trait Searchable: Scrollable {
+    /// Access to the pane's search state
+    fn search_state_mut(&mut self) -> &mut search::SearchState;
+
     /// Returns searchable item names with their line offsets
     fn search_items(&self) -> Vec<(&str, u16)>;
 
-    /// Perform search, updating matches and scrolling to first match
-    fn perform_search(&mut self, query: &str, search_state: &mut search::SearchState) {
-        search_state.matches.clear();
-        search_state.current_match = 0;
+    /// Clear search state
+    fn clear_search(&mut self) {
+        self.search_state_mut().clear();
+    }
 
-        for (name, line) in self.search_items() {
-            if search::smart_contains(name, query) {
-                search_state.matches.push(line);
-            }
-        }
+    /// Perform search, updating matches and scrolling to first match
+    fn perform_search(&mut self, query: &str) {
+        // Collect matching lines first (before mutable borrow)
+        let matches: Vec<u16> = self
+            .search_items()
+            .into_iter()
+            .filter(|(name, _)| search::smart_contains(name, query))
+            .map(|(_, line)| line)
+            .collect();
+
+        let first_match = matches.first().copied();
+
+        let search_state = self.search_state_mut();
+        search_state.matches = matches;
+        search_state.current_match = 0;
+        search_state.last_query = query.into();
 
         // Jump to first match if any
-        if let Some(&first) = search_state.matches.first() {
+        if let Some(first) = first_match {
             self.scroll_to(first);
         }
     }
 
     /// Navigate to next search match
-    fn next_match(&mut self, search_state: &mut search::SearchState) {
-        if let Some(offset) = search_state.next_match() {
+    fn next_match(&mut self) {
+        if let Some(offset) = self.search_state_mut().next_match() {
             self.scroll_to(offset);
         }
     }
 
     /// Navigate to previous search match
-    fn prev_match(&mut self, search_state: &mut search::SearchState) {
-        if let Some(offset) = search_state.prev_match() {
+    fn prev_match(&mut self) {
+        if let Some(offset) = self.search_state_mut().prev_match() {
             self.scroll_to(offset);
         }
     }

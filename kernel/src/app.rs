@@ -42,11 +42,6 @@ pub enum Mode {
     SearchResults,
 }
 
-#[derive(Default)]
-struct SearchState {
-    inner: search::SearchState,
-}
-
 pub struct App {
     pane: Pane,
     cpuid_pane: CpuidPane,
@@ -56,7 +51,6 @@ pub struct App {
     msr_pane: MsrPane,
     mode: Mode,
     search_buffer: String,
-    search_state: SearchState,
 }
 
 impl App {
@@ -82,7 +76,6 @@ impl App {
             msr_pane,
             mode: Mode::default(),
             search_buffer: String::new(),
-            search_state: SearchState::default(),
         }
     }
 
@@ -152,48 +145,61 @@ impl App {
 
     /// Perform search on current pane
     fn perform_search(&mut self) {
-        let query = self.search_buffer.clone();
+        let query = &self.search_buffer;
 
         // Check minimum length
         if query.len() < MIN_SEARCH_LEN {
-            self.search_state.inner.matches.clear();
             return;
         }
-
-        // Skip if query hasn't changed
-        if query == self.search_state.inner.last_query {
-            return;
-        }
-
-        self.search_state.inner.last_query = query.clone();
 
         match self.pane {
-            Pane::Cpuid => self
-                .cpuid_pane
-                .perform_search(&query, &mut self.search_state.inner),
+            Pane::Cpuid => self.cpuid_pane.perform_search(query),
             #[cfg(feature = "msr")]
-            Pane::Msr => self
-                .msr_pane
-                .perform_search(&query, &mut self.search_state.inner),
+            Pane::Msr => self.msr_pane.perform_search(query),
             _ => {}
         }
     }
 
     fn next_match(&mut self) {
         match self.pane {
-            Pane::Cpuid => self.cpuid_pane.next_match(&mut self.search_state.inner),
+            Pane::Cpuid => self.cpuid_pane.next_match(),
             #[cfg(feature = "msr")]
-            Pane::Msr => self.msr_pane.next_match(&mut self.search_state.inner),
+            Pane::Msr => self.msr_pane.next_match(),
             _ => {}
         }
     }
 
     fn prev_match(&mut self) {
         match self.pane {
-            Pane::Cpuid => self.cpuid_pane.prev_match(&mut self.search_state.inner),
+            Pane::Cpuid => self.cpuid_pane.prev_match(),
             #[cfg(feature = "msr")]
-            Pane::Msr => self.msr_pane.prev_match(&mut self.search_state.inner),
+            Pane::Msr => self.msr_pane.prev_match(),
             _ => {}
+        }
+    }
+
+    fn clear_search(&mut self) {
+        match self.pane {
+            Pane::Cpuid => self.cpuid_pane.clear_search(),
+            #[cfg(feature = "msr")]
+            Pane::Msr => self.msr_pane.clear_search(),
+            _ => {}
+        }
+    }
+
+    /// Get current pane's search match info (current, total), None if not searchable
+    fn search_match_info(&self) -> Option<(usize, usize)> {
+        match self.pane {
+            Pane::Cpuid => {
+                let s = self.cpuid_pane.search_state();
+                Some((s.current_match + 1, s.matches.len()))
+            }
+            #[cfg(feature = "msr")]
+            Pane::Msr => {
+                let s = self.msr_pane.search_state();
+                Some((s.current_match + 1, s.matches.len()))
+            }
+            _ => None,
         }
     }
 
@@ -236,7 +242,7 @@ impl App {
                     InputEvent::EnterSearchMode => {
                         self.mode = Mode::Search;
                         self.search_buffer.clear();
-                        self.search_state.inner.clear();
+                        self.clear_search();
                     }
                     InputEvent::ConfirmSearch => self.mode = Mode::SearchResults,
                     InputEvent::ExitSearchMode => self.mode = Mode::Navigation,
@@ -432,8 +438,7 @@ impl Widget for &mut App {
             search_line.render(bottom_bar, buf);
         } else if self.mode == Mode::SearchResults {
             // Show search bar without cursor, indicate n/N navigation
-            let match_count = self.search_state.inner.matches.len();
-            let current = self.search_state.inner.current_match + 1;
+            let (current, match_count) = self.search_match_info().unwrap_or((0, 0));
             let search_line = Line::from(vec![
                 Span::styled("/", Style::default().bold()),
                 Span::raw(self.search_buffer.as_str()),

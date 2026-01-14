@@ -187,6 +187,7 @@ pub fn read_all_msrs(cpufeatures: &CpuFeatures) -> Vec<MsrCategory> {
 pub struct MsrPane {
     categories: Vec<MsrCategory>,
     scroll: ScrollHints,
+    search: search::SearchState,
 }
 
 impl MsrPane {
@@ -194,11 +195,16 @@ impl MsrPane {
         Self {
             categories: read_all_msrs(cpufeatures),
             scroll: ScrollHints::default(),
+            search: search::SearchState::default(),
         }
     }
 
     pub fn categories(&self) -> &[MsrCategory] {
         &self.categories
+    }
+
+    pub fn search_state(&self) -> &search::SearchState {
+        &self.search
     }
 }
 
@@ -209,6 +215,10 @@ impl Scrollable for MsrPane {
 }
 
 impl Searchable for MsrPane {
+    fn search_state_mut(&mut self) -> &mut search::SearchState {
+        &mut self.search
+    }
+
     fn search_items(&self) -> Vec<(&str, u16)> {
         let mut items = Vec::new();
         let mut line: u16 = 0;
