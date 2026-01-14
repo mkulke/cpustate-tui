@@ -3,6 +3,6 @@ resolver = "3"
 members = ["kernel", "image", "search"]
 
 [package]
-name = "cpu-debug"
+name = "cpustate-tui"
 version = "0.1.0"
 edition = "2024"

@@ -1,8 +1,12 @@
-# CPU Debug
+# CPU State TUI
 
-Baremetal program to debug x86_64 CPU state. Written in Rust with [bootloader-rs](github.com/rust-osdev/bootloader) and [ratatui](github.com/ratatui/ratatui). In significant parts co-authored by Github Copilot CLI using a Claude Opus 4.5 model.
+Baremetal program to visualize x86_64 CPU state. Written in Rust with [bootloader-rs](github.com/rust-osdev/bootloader) and [ratatui](github.com/ratatui/ratatui).
+
+Co-authored by Claude Opus 4.5 using GitHub's copilot-cli project.
 
 ## Build
+
+It will create a bootable `bios.img`.
 
 ```sh
 make
@@ -10,7 +14,7 @@ make
 
 ## Run
 
-Spawn in QEMU w/ -accel KVM.
+Spawn in QEMU w/ -accel KVM/MSHV. Only bios boot is supported for now.
 
 ```sh
 make run
