@@ -1,6 +1,8 @@
 //! Model Specific Register (MSR) reading and display
 
 use crate::cpuid::CpuFeatures;
+use crate::pane::{Scrollable, Searchable};
+use crate::pane::ScrollHints;
 use alloc::vec::Vec;
 
 /// MSR entry with name, address, and value
@@ -179,4 +181,50 @@ pub fn read_all_msrs(cpufeatures: &CpuFeatures) -> Vec<MsrCategory> {
     }
 
     categories
+}
+
+/// Pane wrapper for MSR state with scroll and search support
+pub struct MsrPane {
+    categories: Vec<MsrCategory>,
+    scroll: ScrollHints,
+}
+
+impl MsrPane {
+    pub fn new(cpufeatures: &CpuFeatures) -> Self {
+        Self {
+            categories: read_all_msrs(cpufeatures),
+            scroll: ScrollHints::default(),
+        }
+    }
+
+    pub fn categories(&self) -> &[MsrCategory] {
+        &self.categories
+    }
+}
+
+impl Scrollable for MsrPane {
+    fn scroll_hints_mut(&mut self) -> &mut ScrollHints {
+        &mut self.scroll
+    }
+}
+
+impl Searchable for MsrPane {
+    fn search_items(&self) -> Vec<(&str, u16)> {
+        let mut items = Vec::new();
+        let mut line: u16 = 0;
+
+        for category in &self.categories {
+            // Skip header line
+            line += 1;
+
+            for entry in &category.entries {
+                items.push((entry.name, line));
+                line += 1;
+            }
+            // Empty line between categories
+            line += 1;
+        }
+
+        items
+    }
 }

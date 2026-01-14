@@ -20,9 +20,10 @@ mod lapic;
 mod memory;
 #[cfg(feature = "msr")]
 mod msr;
+mod pane;
 mod qemu;
 mod ratatui_backend;
-mod scroll;
+// mod scroll;
 mod serial;
 mod timer;
 

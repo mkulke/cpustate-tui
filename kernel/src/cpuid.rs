@@ -1,6 +1,9 @@
 use alloc::vec::Vec;
 use raw_cpuid::{CpuId, CpuIdReaderNative};
 
+use crate::pane::{Scrollable, Searchable};
+use crate::pane::ScrollHints;
+
 pub struct CpuidState {
     features: CpuFeatures,
 }
@@ -412,4 +415,71 @@ fn build_features(cpuid: &CpuId<CpuIdReaderNative>) -> Vec<(&'static str, bool)>
     push_has!(has_xsave);
 
     out
+}
+
+/// Pane wrapper for CPUID state with scroll and search support
+pub struct CpuidPane {
+    state: CpuidState,
+    scroll: ScrollHints,
+}
+
+impl CpuidPane {
+    pub fn new() -> Self {
+        Self {
+            state: CpuidState::new(),
+            scroll: ScrollHints::default(),
+        }
+    }
+
+    pub fn state(&self) -> &CpuidState {
+        &self.state
+    }
+
+    /// Line offset where features section starts
+    const FEATURES_START: u16 = 5;
+
+    /// Calculate line offsets for search indexing
+    fn extended_features_start(&self) -> u16 {
+        // vendor header(1) + amd(1) + intel(1) + empty(1) + features header(1) + features + empty(1) + header(1)
+        Self::FEATURES_START + self.state.features().len() as u16 + 2
+    }
+
+    fn extended_state_start(&self) -> u16 {
+        self.extended_features_start() + self.state.extended_features().len() as u16 + 2
+    }
+}
+
+impl Scrollable for CpuidPane {
+    fn scroll_hints_mut(&mut self) -> &mut ScrollHints {
+        &mut self.scroll
+    }
+}
+
+impl Searchable for CpuidPane {
+    fn search_items(&self) -> Vec<(&str, u16)> {
+        let mut items = Vec::new();
+
+        // Features
+        let mut line = Self::FEATURES_START;
+        for (name, _) in self.state.features() {
+            items.push((*name, line));
+            line += 1;
+        }
+
+        // Extended features
+        line = self.extended_features_start();
+        for (name, _) in self.state.extended_features() {
+            items.push((*name, line));
+            line += 1;
+        }
+
+        // Extended state features
+        line = self.extended_state_start();
+        for (name, _) in self.state.extended_state_features().supports() {
+            items.push((*name, line));
+            line += 1;
+        }
+
+        items
+    }
 }

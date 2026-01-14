@@ -12,7 +12,8 @@ use x86_64::registers::control::{Cr0, Cr0Flags, Cr4, Cr4Flags};
 use x86_64::registers::xcontrol::{XCr0, XCr0Flags};
 
 use crate::cpuid::CpuidState;
-use crate::scroll::ScrollHints;
+use crate::pane::Scrollable;
+use crate::pane::ScrollHints;
 
 #[inline(always)]
 pub fn enable_sse() {
@@ -227,6 +228,12 @@ impl FpuState {
         let mut area = FxSaveAligned::new_zeroed();
         fxsave64(&mut area);
         area
+    }
+}
+
+impl Scrollable for FpuState {
+    fn scroll_hints_mut(&mut self) -> &mut ScrollHints {
+        &mut self.scroll
     }
 }
 
