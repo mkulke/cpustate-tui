@@ -25,6 +25,7 @@ mod qemu;
 mod ratatui_backend;
 mod serial;
 mod timer;
+mod xsave;
 
 static BOOTLOADER_CONFIG: BootloaderConfig = {
     let mut config = BootloaderConfig::new_default();

@@ -16,6 +16,7 @@ use crate::qemu::{self, QemuExitCode};
 use crate::ratatui_backend::SerialAnsiBackend;
 use crate::serial::{self, SerialPort};
 use crate::timer::TimerState;
+use crate::xsave::XsaveState;
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -46,6 +47,7 @@ pub struct App {
     pane: Pane,
     cpuid_pane: CpuidPane,
     fpu_state: FpuState,
+    xsave_state: XsaveState,
     timer_state: TimerState,
     #[cfg(feature = "msr")]
     msr_pane: MsrPane,
@@ -66,11 +68,13 @@ impl App {
         let msr_pane = MsrPane::new(cpuid_pane.state().cpu_features());
 
         let fpu_state = FpuState::new(cpuid_pane.state());
+        let xsave_state = XsaveState::new(cpuid_pane.state());
 
         Self {
             pane: Pane::Cpuid,
             cpuid_pane,
             fpu_state,
+            xsave_state,
             timer_state,
             #[cfg(feature = "msr")]
             msr_pane,
@@ -273,35 +277,6 @@ impl App {
         }
     }
 
-    fn render_xsave_pane(&self, area: Rect, buf: &mut Buffer) {
-        let state = self.cpuid_pane.state();
-        let line_1 = format!("Leaf 0x1 reports XSAVE: {}", state.has_xsave());
-        let [eax, ebx, ecx, edx] = state.leaf_0x1_0();
-        let line_2 = format!(
-            "Leaf 0x1:0 -> EAX={:08x} EBX={:08x} ECX={:08x} EDX={:08x}",
-            eax, ebx, ecx, edx
-        );
-        let [eax, ebx, ecx, edx] = state.leaf_0xd_0();
-        let line_3 = format!(
-            "Leaf 0xD:0 -> EAX={:08x} EBX={:08x} ECX={:08x} EDX={:08x}",
-            eax, ebx, ecx, edx
-        );
-        let [eax, ..] = state.leaf_0xd_1();
-        let line_4 = format!(
-            "Leaf 0xD:1 -> EAX={:08x} (bit 1 XSAVEC={})",
-            eax,
-            (eax >> 1) & 1
-        );
-
-        let lines = vec![line_1, line_2, line_3, line_4]
-            .into_iter()
-            .map(Line::raw)
-            .collect::<Vec<Line>>();
-        let paragraph = Paragraph::new(lines);
-
-        paragraph.render(area, buf);
-    }
-
     #[cfg(feature = "msr")]
     fn render_msr_pane(&mut self, area: Rect, buf: &mut Buffer) {
         let query = self.search_query().map(String::from);
@@ -422,9 +397,9 @@ impl Widget for &mut App {
 
         match self.pane {
             Pane::Fpu => (&mut self.fpu_state).render(block_inner, buf),
-            Pane::Xsave => self.render_xsave_pane(block_inner, buf),
+            Pane::Xsave => (&self.xsave_state).render(block_inner, buf),
             Pane::Cpuid => self.render_cpuid_pane(block_inner, buf),
-            Pane::Timer => (&mut self.timer_state).render(block_inner, buf),
+            Pane::Timer => (&self.timer_state).render(block_inner, buf),
             #[cfg(feature = "msr")]
             Pane::Msr => self.render_msr_pane(block_inner, buf),
         }
