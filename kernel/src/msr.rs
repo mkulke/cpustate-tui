@@ -262,10 +262,9 @@ impl Widget for &mut MsrPane {
             lines.push(Line::styled(category.name, Style::default().bold()));
 
             for entry in &category.entries {
-                let value_str = match entry.value {
-                    Some(v) => format!("0x{:016x}", v),
-                    None => "N/A".into(),
-                };
+                // Read fresh MSR value on each render
+                let value = read_msr(entry.address);
+                let value_str = format!("0x{:016x}", value);
                 let suffix = format!(" (0x{:08X}) = {}", entry.address, value_str);
                 lines.push(highlight_line(entry.name, &suffix, 24, query));
             }
