@@ -239,7 +239,10 @@ impl App {
                         self.clear_search();
                     }
                     InputEvent::ConfirmSearch => self.mode = Mode::SearchResults,
-                    InputEvent::ExitSearchMode => self.mode = Mode::Navigation,
+                    InputEvent::ExitSearchMode => {
+                        self.mode = Mode::Navigation;
+                        self.clear_search();
+                    }
                     InputEvent::SearchInput(b) => {
                         // Limit search buffer length (leave room for "/" prefix)
                         if self.search_buffer.len() < 76 {
