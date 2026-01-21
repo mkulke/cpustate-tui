@@ -155,3 +155,32 @@ impl Lapic {
 pub fn lapic_timer_freq_hz() -> Option<u64> {
     unsafe { LAPIC_TIMER_FREQ_HZ }
 }
+
+/// LAPIC timer register values
+#[derive(Clone, Copy, Default)]
+pub struct LapicTimerRegs {
+    pub lvt_timer: u32,
+    pub initial_count: u32,
+    pub current_count: u32,
+    pub divide_config: u32,
+}
+
+/// Read the current LAPIC timer register values
+pub fn read_lapic_timer_regs() -> LapicTimerRegs {
+    use x86_64::registers::model_specific::Msr;
+
+    // x2APIC MSR addresses for timer registers
+    const MSR_LVT_TIMER: u32 = 0x832;
+    const MSR_TICR: u32 = 0x838;
+    const MSR_TCCR: u32 = 0x839;
+    const MSR_TDCR: u32 = 0x83E;
+
+    unsafe {
+        LapicTimerRegs {
+            lvt_timer: Msr::new(MSR_LVT_TIMER).read() as u32,
+            initial_count: Msr::new(MSR_TICR).read() as u32,
+            current_count: Msr::new(MSR_TCCR).read() as u32,
+            divide_config: Msr::new(MSR_TDCR).read() as u32,
+        }
+    }
+}

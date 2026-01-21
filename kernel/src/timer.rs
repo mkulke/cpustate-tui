@@ -11,7 +11,7 @@ use ratatui::widgets::{Paragraph, Widget};
 
 use crate::cpuid;
 use crate::interrupts::tick_count;
-use crate::lapic::{lapic_timer_freq_hz, TARGET_TIMER_HZ};
+use crate::lapic::{TARGET_TIMER_HZ, lapic_timer_freq_hz, read_lapic_timer_regs};
 
 pub struct TimerState {
     tick_count: usize,
@@ -60,7 +60,6 @@ fn hsv_to_rgb(hue: u16) -> (u8, u8, u8) {
 impl Widget for &TimerState {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let mut lines: Vec<Line> = vec![Line::styled("Timer Calibration", Style::default().bold())];
-        lines.push(Line::raw(""));
 
         // TSC frequency from CPUID
         let tsc_freq_str: String = match cpuid::tsc_frequency() {
@@ -89,6 +88,34 @@ impl Widget for &TimerState {
         lines.push(Line::raw(format!(
             "{:<18}{}",
             "Current Ticks:", self.tick_count
+        )));
+        lines.push(Line::raw(""));
+
+        // LAPIC Timer Registers section
+        lines.push(Line::styled(
+            "LAPIC Timer Registers",
+            Style::default().bold(),
+        ));
+        lines.push(Line::raw(format!(
+            "{:<18}{:<14}{}",
+            "Register", "MSR", "Value"
+        )));
+        let r = read_lapic_timer_regs();
+        lines.push(Line::raw(format!(
+            "{:<18}{:<14}0x{:08X}",
+            "LVT Timer", "0x832", r.lvt_timer
+        )));
+        lines.push(Line::raw(format!(
+            "{:<18}{:<14}0x{:08X} ({})",
+            "Initial Count", "0x838", r.initial_count, r.initial_count
+        )));
+        lines.push(Line::raw(format!(
+            "{:<18}{:<14}0x{:08X} ({})",
+            "Current Count", "0x839", r.current_count, r.current_count
+        )));
+        lines.push(Line::raw(format!(
+            "{:<18}{:<14}0x{:08X}",
+            "Divide Config", "0x83E", r.divide_config
         )));
         lines.push(Line::raw(""));
 
