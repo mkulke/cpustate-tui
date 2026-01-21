@@ -72,6 +72,7 @@ const MSR_IA32_APICBASE: u32 = 0x1B;
 // TSC MSRs
 const MSR_IA32_TSC: u32 = 0x10;
 const MSR_TSC_ADJUST: u32 = 0x3B;
+const MSR_IA32_TSC_DEADLINE: u32 = 0x6E0;
 
 // SYSENTER MSRs - architectural
 const MSR_IA32_SYSENTER_CS: u32 = 0x174;
@@ -131,6 +132,10 @@ pub fn read_all_msrs(cpufeatures: &CpuFeatures) -> Vec<MsrCategory> {
     // Time-related MSRs
     let mut tsc_entries = read_msrs(&[("IA32_TSC", MSR_IA32_TSC)]);
     if let Some(entry) = read_msr_if("IA32_TSC_ADJUST", MSR_TSC_ADJUST, cpufeatures.has_tsc_adjust())
+    {
+        tsc_entries.push(entry);
+    }
+    if let Some(entry) = read_msr_if("IA32_TSC_DEADLINE", MSR_IA32_TSC_DEADLINE, cpufeatures.has_tsc_deadline())
     {
         tsc_entries.push(entry);
     }

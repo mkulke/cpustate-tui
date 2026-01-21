@@ -177,6 +177,12 @@ impl CpuFeatures {
             .get_extended_feature_info()
             .is_some_and(|efi| efi.has_tsc_adjust_msr())
     }
+
+    pub fn has_tsc_deadline(&self) -> bool {
+        self.cpuid
+            .get_feature_info()
+            .is_some_and(|fi| fi.has_tsc_deadline())
+    }
 }
 
 /// Returns TSC frequency in Hz from CPUID leaf 0x15, or processor base
