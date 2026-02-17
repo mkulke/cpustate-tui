@@ -28,7 +28,7 @@ pub fn map_ioapic(
     let phys = PhysAddr::new(IOAPIC_PHYS);
     let virt = VirtAddr::new(IOAPIC_VIRT);
 
-    // IOAPIC base is 4KiB-aligned; if not, you'd need to handle offsets.
+    // IOAPIC base is 4KiB-aligned; if not, we'd have to handle offsets.
     assert_eq!(IOAPIC_PHYS & 0xfff, 0);
 
     let page = Page::<Size4KiB>::containing_address(virt);

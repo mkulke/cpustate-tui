@@ -55,6 +55,11 @@ extern "x86-interrupt" fn spurious_interrupt_handler(_sf: InterruptStackFrame) {
 }
 
 pub fn init(mappings: &memory::Mappings) {
+    // ioapic is configured to rerouted to BSP LAPIC
+    ioapic::disable_pic();
+    ioapic::init(mappings.ioapic_base());
+
+    // the IDT is global and can be shared across BSP and APs, so we init once
     let idt = IDT.call_once(|| {
         let mut idt = InterruptDescriptorTable::new();
         idt[TIMER_VECTOR].set_handler_fn(timer_interrupt_handler);
@@ -64,11 +69,10 @@ pub fn init(mappings: &memory::Mappings) {
 
         idt
     });
+
+    // load + enable in current CPU, this part should be loaded on BSP and APs
     idt.load();
     let mut lapic = Lapic::new();
     lapic.enable();
-
-    ioapic::disable_pic();
-    ioapic::init(mappings.ioapic_base());
     interrupts::enable();
 }
