@@ -6,7 +6,7 @@ extern crate alloc;
 
 use app::App;
 use bootloader_api::config::{BootloaderConfig, Mapping};
-use bootloader_api::{entry_point, BootInfo};
+use bootloader_api::{BootInfo, entry_point};
 use core::fmt::Write;
 
 mod app;

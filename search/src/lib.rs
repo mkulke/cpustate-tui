@@ -67,17 +67,16 @@ pub fn smart_contains(haystack: &str, needle: &str) -> bool {
 
 /// Search through feature names and return matching line offsets
 pub fn find_matches(query: &str, features: &[(&str, bool)], start_line: u16) -> Vec<u16> {
-    let mut matches = Vec::new();
-    let mut line = start_line;
-
-    for (name, _) in features {
-        if smart_contains(name, query) {
-            matches.push(line);
-        }
-        line += 1;
-    }
-
-    matches
+    features
+        .iter()
+        .enumerate()
+        .filter_map(|(i, (name, _))| {
+            if smart_contains(name, query) {
+                return Some(start_line + i as u16);
+            }
+            None
+        })
+        .collect()
 }
 
 /// Search through string names and return matching line offsets

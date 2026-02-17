@@ -1,10 +1,10 @@
 use pic8259::ChainedPics;
 use x86_64::{
-    structures::paging::{
-        mapper::MapToError, FrameAllocator, Mapper, Page, PageTableFlags as Flags, PhysFrame,
-        Size4KiB,
-    },
     PhysAddr, VirtAddr,
+    structures::paging::{
+        FrameAllocator, Mapper, Page, PageTableFlags as Flags, PhysFrame, Size4KiB,
+        mapper::MapToError,
+    },
 };
 
 const IOAPIC_PHYS: u64 = 0xFEC0_0000;

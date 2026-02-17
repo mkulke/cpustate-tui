@@ -10,7 +10,7 @@ use ratatui::text::Line;
 use ratatui::widgets::{Paragraph, Widget};
 
 use crate::cpuid::CpuFeatures;
-use crate::pane::{highlight_line, ScrollHints, Scrollable, Searchable};
+use crate::pane::{ScrollHints, Scrollable, Searchable, highlight_line};
 
 /// MSR entry with name, address, and value
 pub struct MsrEntry {
@@ -131,12 +131,18 @@ pub fn read_all_msrs(cpufeatures: &CpuFeatures) -> Vec<MsrCategory> {
 
     // Time-related MSRs
     let mut tsc_entries = read_msrs(&[("IA32_TSC", MSR_IA32_TSC)]);
-    if let Some(entry) = read_msr_if("IA32_TSC_ADJUST", MSR_TSC_ADJUST, cpufeatures.has_tsc_adjust())
-    {
+    if let Some(entry) = read_msr_if(
+        "IA32_TSC_ADJUST",
+        MSR_TSC_ADJUST,
+        cpufeatures.has_tsc_adjust(),
+    ) {
         tsc_entries.push(entry);
     }
-    if let Some(entry) = read_msr_if("IA32_TSC_DEADLINE", MSR_IA32_TSC_DEADLINE, cpufeatures.has_tsc_deadline())
-    {
+    if let Some(entry) = read_msr_if(
+        "IA32_TSC_DEADLINE",
+        MSR_IA32_TSC_DEADLINE,
+        cpufeatures.has_tsc_deadline(),
+    ) {
         tsc_entries.push(entry);
     }
     categories.push(MsrCategory {

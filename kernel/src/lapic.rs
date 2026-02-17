@@ -1,5 +1,5 @@
 use core::arch::x86_64::_rdtsc;
-use x2apic::lapic::{xapic_base, LocalApic, LocalApicBuilder, TimerDivide, TimerMode};
+use x2apic::lapic::{LocalApic, LocalApicBuilder, TimerDivide, TimerMode, xapic_base};
 use x86_64::instructions::port::Port;
 
 use crate::cpuid;

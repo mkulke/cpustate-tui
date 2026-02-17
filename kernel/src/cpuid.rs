@@ -9,7 +9,7 @@ use ratatui::style::Style;
 use ratatui::text::Line;
 use ratatui::widgets::{Paragraph, Widget};
 
-use crate::pane::{highlight_line, ScrollHints, Scrollable, Searchable};
+use crate::pane::{ScrollHints, Scrollable, Searchable, highlight_line};
 
 pub struct CpuidState {
     features: CpuFeatures,
@@ -149,21 +149,15 @@ impl CpuFeatures {
     }
 
     pub fn has_pat(&self) -> bool {
-        self.cpuid
-            .get_feature_info()
-            .is_some_and(|fi| fi.has_pat())
+        self.cpuid.get_feature_info().is_some_and(|fi| fi.has_pat())
     }
 
     pub fn has_mce(&self) -> bool {
-        self.cpuid
-            .get_feature_info()
-            .is_some_and(|fi| fi.has_mce())
+        self.cpuid.get_feature_info().is_some_and(|fi| fi.has_mce())
     }
 
     pub fn has_mca(&self) -> bool {
-        self.cpuid
-            .get_feature_info()
-            .is_some_and(|fi| fi.has_mca())
+        self.cpuid.get_feature_info().is_some_and(|fi| fi.has_mca())
     }
 
     pub fn has_rdtscp(&self) -> bool {
@@ -192,9 +186,10 @@ pub fn tsc_frequency() -> Option<u64> {
 
     // Try leaf 0x15 first (TSC/Crystal Clock info)
     if let Some(tsc_info) = cpuid.get_tsc_info()
-        && let Some(freq) = tsc_info.tsc_frequency() {
-            return Some(freq);
-        }
+        && let Some(freq) = tsc_info.tsc_frequency()
+    {
+        return Some(freq);
+    }
 
     // Fall back to leaf 0x16 (Processor Frequency Info)
     let freq_info = cpuid.get_processor_frequency_info()?;
@@ -528,7 +523,7 @@ impl Widget for &mut CpuidPane {
 
         let features_header = Line::styled("CPU Features:", Style::default().bold());
         lines.push(features_header);
-        for feature in self.state.features().clone() {
+        for feature in self.state.features() {
             let yes_no = if feature.1 { "Yes" } else { "No" };
             let suffix = format!(" = {}", yes_no);
             lines.push(highlight_line(feature.0, &suffix, 16, query));
@@ -538,7 +533,7 @@ impl Widget for &mut CpuidPane {
 
         let extended_features_header = Line::styled("Extended Features:", Style::default().bold());
         lines.push(extended_features_header);
-        for extended_feature in self.state.extended_features().clone() {
+        for extended_feature in self.state.extended_features() {
             let yes_no = if extended_feature.1 { "Yes" } else { "No" };
             let suffix = format!(" = {}", yes_no);
             lines.push(highlight_line(extended_feature.0, &suffix, 16, query));
@@ -550,7 +545,7 @@ impl Widget for &mut CpuidPane {
             Line::styled("Extended State Features:", Style::default().bold());
         lines.push(extended_state_features_header);
         let esf = self.state.extended_state_features();
-        for feature in esf.supports().clone() {
+        for feature in esf.supports() {
             let yes_no = if feature.1 { "Yes" } else { "No" };
             let suffix = format!(" = {}", yes_no);
             lines.push(highlight_line(feature.0, &suffix, 30, query));

@@ -1,5 +1,5 @@
 use crate::ioapic::{self, COM1_VECTOR};
-use crate::lapic::{Lapic, ERROR_VECTOR, SPURIOUS_VECTOR, TARGET_TIMER_HZ, TIMER_VECTOR};
+use crate::lapic::{ERROR_VECTOR, Lapic, SPURIOUS_VECTOR, TARGET_TIMER_HZ, TIMER_VECTOR};
 use crate::memory;
 use crate::serial;
 use core::sync::atomic::{AtomicUsize, Ordering};

@@ -1,6 +1,6 @@
 use crate::ioapic;
-use bootloader_api::info::{MemoryRegionKind, MemoryRegions};
 use bootloader_api::BootInfo;
+use bootloader_api::info::{MemoryRegionKind, MemoryRegions};
 use linked_list_allocator::LockedHeap;
 use x86_64::structures::paging::mapper::MapToError;
 use x86_64::structures::paging::{

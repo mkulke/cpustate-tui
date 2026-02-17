@@ -10,19 +10,19 @@ use crate::input::{Input, InputEvent};
 use crate::interrupts;
 #[cfg(feature = "msr")]
 use crate::msr::MsrPane;
-use crate::pane::{ScrollDirection, Scrollable, Searchable, MIN_SEARCH_LEN};
+use crate::pane::{MIN_SEARCH_LEN, ScrollDirection, Scrollable, Searchable};
 use crate::qemu::{self, QemuExitCode};
 use crate::ratatui_backend::SerialAnsiBackend;
 use crate::serial::{self, SerialPort};
 use crate::timer::TimerState;
 use crate::xsave::XsaveState;
 
+use ratatui::Terminal;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Widget};
-use ratatui::Terminal;
 
 #[derive(PartialEq, Clone, Copy)]
 pub enum Pane {
