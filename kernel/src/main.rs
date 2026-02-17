@@ -15,7 +15,6 @@ mod fpu;
 mod input;
 mod interrupts;
 mod ioapic;
-mod irq_mutex;
 mod lapic;
 mod memory;
 #[cfg(feature = "msr")]

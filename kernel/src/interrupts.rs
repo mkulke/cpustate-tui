@@ -2,6 +2,7 @@ use crate::ioapic::{self, COM1_VECTOR};
 use crate::lapic::{ERROR_VECTOR, Lapic, SPURIOUS_VECTOR, TARGET_TIMER_HZ, TIMER_VECTOR};
 use crate::memory;
 use crate::serial;
+use core::borrow::BorrowMut;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use spin::Once;
 use x86_64::instructions::interrupts;
@@ -34,15 +35,14 @@ extern "x86-interrupt" fn timer_interrupt_handler(_sf: InterruptStackFrame) {
 }
 
 extern "x86-interrupt" fn com1_interrupt_handler(_stack_frame: InterruptStackFrame) {
-    serial::RX_QUEUE.with(|queue| {
-        let mut queue = queue.borrow_mut();
-        let (mut prod, _cons) = queue.split();
-        while serial::uart_rx_ready() {
-            let byte = serial::uart_read_byte();
-            // we want to ignore overflow here
-            _ = prod.enqueue(byte);
-        }
-    });
+    let mut queue = serial::RX_QUEUE.lock();
+    let queue = queue.borrow_mut();
+    let (mut prod, _cons) = queue.split();
+    while serial::uart_rx_ready() {
+        let byte = serial::uart_read_byte();
+        // we want to ignore overflow here
+        _ = prod.enqueue(byte);
+    }
     lapic().eoi();
 }
 

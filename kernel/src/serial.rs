@@ -1,6 +1,5 @@
-use crate::irq_mutex::IrqMutex;
-use core::cell::RefCell;
 use heapless::spsc::Queue;
+use spin::Mutex;
 pub use uart_16550::SerialPort;
 use x86::io::inb;
 
@@ -9,7 +8,7 @@ const COM1_DATA: u16 = COM1_BASE;
 const COM1_LSR: u16 = COM1_BASE + 5;
 pub const COM1_IRQ: u8 = 0x04;
 
-pub static RX_QUEUE: IrqMutex<RefCell<Queue<u8, 256>>> = IrqMutex::new(RefCell::new(Queue::new()));
+pub static RX_QUEUE: Mutex<Queue<u8, 256>> = Mutex::new(Queue::new());
 
 pub fn port() -> SerialPort {
     let mut port = unsafe { uart_16550::SerialPort::new(0x3F8) };

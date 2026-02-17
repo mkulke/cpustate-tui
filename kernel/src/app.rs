@@ -1,8 +1,9 @@
 use alloc::format;
 use alloc::string::String;
 use alloc::vec;
+use core::borrow::BorrowMut;
 use core::sync::atomic::Ordering;
-use x86_64::instructions;
+use x86_64::instructions::{self, interrupts::without_interrupts};
 
 use crate::cpuid::CpuidPane;
 use crate::fpu::FpuState;
@@ -118,8 +119,10 @@ impl App {
     fn handle_input(&mut self, input: &mut Input) -> Option<InputEvent> {
         let mut event = None;
 
-        serial::RX_QUEUE.with(|queue| {
-            let mut queue = queue.borrow_mut();
+        // we have to disable interrupts to safely drain the RX queue
+        without_interrupts(|| {
+            let mut queue = serial::RX_QUEUE.lock();
+            let queue = queue.borrow_mut();
             let (_prod, mut cons) = queue.split();
 
             let Some(byte) = cons.dequeue() else {
