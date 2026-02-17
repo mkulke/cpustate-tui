@@ -27,7 +27,7 @@ const PIT_CONTROL: u16 = 0x61;
 pub struct Lapic(LocalApic);
 
 /// Calibrated LAPIC timer frequency in Hz
-static mut LAPIC_TIMER_FREQ_HZ: Option<u64> = None;
+static LAPIC_TIMER_FREQ_HZ: spin::Mutex<Option<u64>> = spin::Mutex::new(None);
 
 impl Lapic {
     pub fn new() -> Self {
@@ -85,7 +85,7 @@ impl Lapic {
             let elapsed_lapic_ticks = start_count - end_count;
 
             let lapic_freq = (elapsed_lapic_ticks as u64 * tsc_freq) / calibration_tsc_ticks;
-            LAPIC_TIMER_FREQ_HZ = Some(lapic_freq);
+            *LAPIC_TIMER_FREQ_HZ.lock() = Some(lapic_freq);
 
             Some((lapic_freq / TARGET_TIMER_HZ) as u32)
         }
@@ -138,7 +138,7 @@ impl Lapic {
 
             // Calculate LAPIC frequency: elapsed_ticks / (pit_ticks / PIT_FREQUENCY)
             let lapic_freq = (elapsed_lapic_ticks as u64 * PIT_FREQUENCY) / pit_ticks as u64;
-            LAPIC_TIMER_FREQ_HZ = Some(lapic_freq);
+            *LAPIC_TIMER_FREQ_HZ.lock() = Some(lapic_freq);
 
             Some((lapic_freq / TARGET_TIMER_HZ) as u32)
         }
@@ -153,7 +153,7 @@ impl Lapic {
 
 /// Returns the calibrated LAPIC timer frequency in Hz, if available.
 pub fn lapic_timer_freq_hz() -> Option<u64> {
-    unsafe { LAPIC_TIMER_FREQ_HZ }
+    *LAPIC_TIMER_FREQ_HZ.lock()
 }
 
 /// LAPIC timer register values

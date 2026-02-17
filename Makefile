@@ -35,6 +35,13 @@ run: bios.img
 		-m 128M \
 		-device isa-debug-exit,iobase=0xf4,iosize=0x04
 
+.PHONY: lint
+lint:
+	# kernel code needs to be linted via the image crate
+	cargo clippy --workspace --exclude kernel -- -D warnings
+	cargo clippy -p image --release $(CARGO_FEATURES) -- -D warnings
+	cargo fmt --all -- --check
+
 .PHONY: clean
 clean:
 	cargo clean
